@@ -27,7 +27,6 @@ import { startAuthentication } from "@simplewebauthn/browser";
 import { useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../../lib/api";
 import { useAuthStore } from "../../store/auth";
 
@@ -154,7 +153,6 @@ export function DeviceVerify() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, token } = useAuthStore();
-  const { t } = useTranslation();
 
   const prefilled = searchParams.get("code") ?? "";
   const [codeInput, setCodeInput] = useState(prefilled);
@@ -175,13 +173,6 @@ export function DeviceVerify() {
 
   const isSiteScope = useCallback((s: string) => s.startsWith("site:"), []);
 
-  // Redirect to login if not authenticated
-  if (!token || !user) {
-    const returnTo = `/oauth/device${window.location.search}`;
-    navigate(`/login?redirect=${encodeURIComponent(returnTo)}`);
-    return null;
-  }
-
   const {
     data,
     isLoading: infoLoading,
@@ -189,9 +180,16 @@ export function DeviceVerify() {
   } = useQuery({
     queryKey: ["device-code-verify", submittedCode],
     queryFn: () => api.deviceCodeVerify({ user_code: submittedCode }),
-    enabled: submittedCode.length >= 8,
+    enabled: !!token && submittedCode.length >= 8,
     retry: false,
   });
+
+  // Redirect to login if not authenticated (after all hooks)
+  if (!token || !user) {
+    const returnTo = `/oauth/device${window.location.search}`;
+    navigate(`/login?redirect=${encodeURIComponent(returnTo)}`);
+    return null;
+  }
 
   const handleLookup = () => {
     const clean = codeInput.replace(/-/g, "").trim();
@@ -227,7 +225,6 @@ export function DeviceVerify() {
     setTeamScopeError(null);
     setLoading(true);
     try {
-      const approvedScopes = data.scopes.filter((s) => !declinedScopes.has(s));
       await api.deviceCodeAuthorize({
         user_code: data.user_code,
         action,
@@ -263,15 +260,20 @@ export function DeviceVerify() {
   };
 
   const handlePasskeyVerify = async () => {
+    setSiteError(null);
     setPasskeyLoading(true);
     try {
-      const options = await api.passkeyVerifyBegin();
-      const authResp = await startAuthentication(options as any);
-      const verifyResult = await api.passkeyVerifyFinish(
-        (options as any).challenge,
-        authResp,
+      const beginData = await api.passkeyVerifyBegin();
+      const authResponse = await startAuthentication({
+        optionsJSON: beginData as Parameters<
+          typeof startAuthentication
+        >[0]["optionsJSON"],
+      });
+      const result = await api.passkeyVerifyFinish(
+        (beginData as { challenge: string }).challenge,
+        authResponse,
       );
-      setPasskeyVerifyToken(verifyResult.verify_token);
+      setPasskeyVerifyToken(result.verify_token);
     } catch {
       setSiteError("Passkey verification failed.");
     } finally {
@@ -383,8 +385,6 @@ export function DeviceVerify() {
   }
 
   // Consent screen
-  const approvedScopes = data.scopes.filter((s) => !declinedScopes.has(s));
-
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -451,7 +451,11 @@ export function DeviceVerify() {
                     onChange={(_, d) => {
                       setDeclinedScopes((prev) => {
                         const next = new Set(prev);
-                        d.checked ? next.delete(scope) : next.add(scope);
+                        if (d.checked) {
+                          next.delete(scope);
+                        } else {
+                          next.add(scope);
+                        }
                         return next;
                       });
                     }}
@@ -582,7 +586,11 @@ export function DeviceVerify() {
                 }
               >
                 {data.user_admin_teams.map((team) => (
-                  <Option key={team.id} value={team.id}>
+                  <Option
+                    key={team.id}
+                    value={team.id}
+                    text={`${team.name} (${team.role})`}
+                  >
                     {team.name} ({team.role})
                   </Option>
                 ))}
