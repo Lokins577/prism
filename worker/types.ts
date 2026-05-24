@@ -404,6 +404,22 @@ export interface LoginErrorRow {
   created_at: number;
 }
 
+export interface DeviceCodeRow {
+  id: string;
+  device_code: string;
+  user_code: string;
+  client_id: string;
+  scope: string; // JSON string[]
+  status: "pending" | "authorized" | "denied" | "expired";
+  user_id: string | null;
+  code_challenge: string | null;
+  code_challenge_method: string | null;
+  interval: number;
+  last_polled_at: number | null;
+  expires_at: number;
+  created_at: number;
+}
+
 // ─── Application types ────────────────────────────────────────────────────────
 
 export type SocialProvider = "github" | "google" | "microsoft" | "discord";

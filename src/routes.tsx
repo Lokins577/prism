@@ -168,6 +168,13 @@ export function createRoutes(ctx: RouteContext): RouteObject[] {
           Component: m.Verify2FA,
         })),
     },
+    {
+      path: "/oauth/device",
+      lazy: () =>
+        import("./pages/oauth/DeviceVerify").then((m) => ({
+          Component: m.DeviceVerify,
+        })),
+    },
 
     // ── Public user/team profiles ───────────────────────────────────────────
     {

@@ -1682,6 +1682,486 @@ app.post("/2fa/verify", async (c) => {
   });
 });
 
+// ─── Device Authorization Grant (RFC 8628) ──────────────────────────────────
+// Enables CLI / IoT / limited-input clients to authenticate by having the
+// user enter a short code on a browser-equipped device.
+
+const DEVICE_CODE_TTL = 600; // 10 minutes
+const DEVICE_CODE_INTERVAL = 5; // polling interval in seconds
+const USER_CODE_CHARSET = "BCDFGHJKLMNPQRSTVWXZ"; // no vowels (avoids bad words), no ambiguous chars
+const USER_CODE_LENGTH = 8; // yields 8 chars displayed as XXXX-XXXX
+
+function generateUserCode(): string {
+  const arr = crypto.getRandomValues(new Uint8Array(USER_CODE_LENGTH));
+  let code = "";
+  for (let i = 0; i < USER_CODE_LENGTH; i++) {
+    code += USER_CODE_CHARSET[arr[i] % USER_CODE_CHARSET.length];
+  }
+  return code;
+}
+
+function formatUserCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+// Friendly redirect for direct hits — sends users to the SPA route.
+app.get("/device", (c) => {
+  const qs = new URL(c.req.url).search;
+  return c.redirect(`/oauth/device${qs}`, 302);
+});
+
+// POST /api/oauth/device/code — client requests a device code
+app.post("/device/code", async (c) => {
+  const contentType = c.req.header("Content-Type") ?? "";
+  let params: Record<string, string>;
+  if (contentType.includes("application/json")) {
+    params = await c.req.json<Record<string, string>>();
+  } else {
+    const text = await c.req.text();
+    params = Object.fromEntries(new URLSearchParams(text));
+  }
+
+  let { client_id: clientId, client_secret: clientSecret } = params;
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Basic ")) {
+    const decoded = atob(authHeader.slice(6));
+    const [id, secret] = decoded.split(":");
+    clientId = id ?? "";
+    clientSecret = secret ?? "";
+  }
+
+  if (!clientId) return c.json({ error: "invalid_request" }, 400);
+
+  const oauthApp = await c.env.DB.prepare(
+    "SELECT * FROM oauth_apps WHERE client_id = ? AND is_active = 1",
+  )
+    .bind(clientId)
+    .first<OAuthAppRow>();
+  if (!oauthApp) return c.json({ error: "invalid_client" }, 401);
+
+  if (!oauthApp.is_public) {
+    if (
+      !oauthApp.client_secret ||
+      !clientSecret ||
+      !(await timingSafeSecretEqual(
+        c.env,
+        oauthApp.client_secret,
+        clientSecret,
+      ))
+    ) {
+      return c.json({ error: "invalid_client" }, 401);
+    }
+  }
+
+  const rl = await rateLimit(c.env.KV_CACHE, `device-code:${clientId}`, 30, 60);
+  if (!rl.allowed) return c.json({ error: "rate_limited" }, 429);
+
+  const requestedScopes = (params.scope ?? "").split(" ").filter(Boolean);
+  const allowedScopes = JSON.parse(oauthApp.allowed_scopes) as string[];
+  const { scopes } = await resolveRequestedScopes(
+    c.env.DB,
+    c.env.APP_URL,
+    requestedScopes,
+    allowedScopes,
+    oauthApp.client_id,
+  );
+
+  const now = Math.floor(Date.now() / 1000);
+  const id = randomId();
+  const deviceCode = randomBase64url(32);
+  const userCode = generateUserCode();
+
+  await c.env.DB.prepare(
+    `INSERT INTO device_codes (id, device_code, user_code, client_id, scope, status, code_challenge, code_challenge_method, interval, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      deviceCode,
+      userCode,
+      clientId,
+      JSON.stringify(scopes),
+      params.code_challenge ?? null,
+      params.code_challenge_method ?? null,
+      DEVICE_CODE_INTERVAL,
+      now + DEVICE_CODE_TTL,
+      now,
+    )
+    .run();
+
+  return c.json({
+    device_code: deviceCode,
+    user_code: formatUserCode(userCode),
+    verification_uri: `${c.env.APP_URL}/oauth/device`,
+    verification_uri_complete: `${c.env.APP_URL}/oauth/device?code=${formatUserCode(userCode)}`,
+    expires_in: DEVICE_CODE_TTL,
+    interval: DEVICE_CODE_INTERVAL,
+  });
+});
+
+// GET /api/oauth/device/verify — SPA fetches info about a user_code
+app.get("/device/verify", optionalAuth, async (c) => {
+  const rawCode = c.req.query("user_code");
+  if (!rawCode) return c.json({ error: "invalid_request" }, 400);
+
+  const userCode = rawCode.replace(/-/g, "").toUpperCase();
+
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM device_codes WHERE user_code = ?",
+  )
+    .bind(userCode)
+    .first<import("../types").DeviceCodeRow>();
+  if (!row) return c.json({ error: "invalid_code" }, 404);
+
+  const now = Math.floor(Date.now() / 1000);
+  if (row.expires_at < now) return c.json({ error: "code_expired" }, 400);
+  if (row.status !== "pending") return c.json({ error: "code_used" }, 400);
+
+  const oauthApp = await c.env.DB.prepare(
+    "SELECT * FROM oauth_apps WHERE client_id = ? AND is_active = 1",
+  )
+    .bind(row.client_id)
+    .first<OAuthAppRow>();
+  if (!oauthApp) return c.json({ error: "invalid_client" }, 400);
+
+  const isVerified = await computeIsVerified(
+    c.env.DB,
+    oauthApp.owner_id,
+    oauthApp.website_url,
+    oauthApp.redirect_uris,
+    oauthApp.team_id,
+  );
+
+  const scopes = JSON.parse(row.scope) as string[];
+  const needsTeamGrant = hasUnboundTeamScopes(scopes);
+  let userAdminTeams: Array<{
+    id: string;
+    name: string;
+    avatar_url: string | null;
+    role: string;
+  }> = [];
+  if (needsTeamGrant && c.get("user")) {
+    const memberships = await listEffectiveTeamMemberships(
+      c.env.DB,
+      c.get("user")!.id,
+    );
+    const admin = memberships.filter((m) =>
+      ["owner", "co-owner", "admin"].includes(m.role),
+    );
+    admin.sort((a, b) => {
+      const rank = (r: string) =>
+        r === "owner" ? 0 : r === "co-owner" ? 1 : 2;
+      return (
+        rank(a.role) - rank(b.role) || a.team.name.localeCompare(b.team.name)
+      );
+    });
+    userAdminTeams = await Promise.all(
+      admin.map(async (m) => ({
+        id: m.team.id,
+        name: m.team.name,
+        avatar_url: await proxyImageUrl(
+          c.env.APP_URL,
+          c.env.DB,
+          m.team.avatar_url,
+        ),
+        role: m.role,
+      })),
+    );
+  }
+
+  const appOptionalScopes = JSON.parse(
+    oauthApp.optional_scopes ?? "[]",
+  ) as string[];
+  const optionalScopes = scopes.filter((s) => appOptionalScopes.includes(s));
+
+  return c.json({
+    app: {
+      id: oauthApp.id,
+      name: oauthApp.name,
+      description: oauthApp.description,
+      icon_url: await proxyImageUrl(c.env.APP_URL, c.env.DB, oauthApp.icon_url),
+      unproxied_icon_url: oauthApp.icon_url,
+      website_url: oauthApp.website_url,
+      is_verified: isVerified,
+      is_official: oauthApp.is_official === 1,
+      is_first_party: oauthApp.is_first_party === 1,
+      is_public: oauthApp.is_public === 1,
+    },
+    user_code: formatUserCode(row.user_code),
+    scopes,
+    optional_scopes: optionalScopes,
+    expires_at: row.expires_at,
+    user: c.get("user") ?? null,
+    requires_site_grant: hasSiteScopes(scopes),
+    site_scope_confirm_phrase: hasSiteScopes(scopes)
+      ? SITE_SCOPE_CONFIRM_PHRASE
+      : null,
+    requires_team_grant: needsTeamGrant,
+    team_grant_permissions: needsTeamGrant
+      ? unboundTeamPermissions(scopes)
+      : [],
+    user_admin_teams: userAdminTeams,
+  });
+});
+
+// POST /api/oauth/device/authorize — user approves or denies
+app.post("/device/authorize", requireAuth, async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json<{
+    user_code: string;
+    action: "approve" | "deny";
+    totp_code?: string;
+    passkey_verify_token?: string;
+    confirm_text?: string;
+    team_id?: string;
+  }>();
+
+  if (!body.user_code) return c.json({ error: "invalid_request" }, 400);
+
+  const userCode = body.user_code.replace(/-/g, "").toUpperCase();
+
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM device_codes WHERE user_code = ?",
+  )
+    .bind(userCode)
+    .first<import("../types").DeviceCodeRow>();
+  if (!row) return c.json({ error: "invalid_code" }, 404);
+
+  const now = Math.floor(Date.now() / 1000);
+  if (row.expires_at < now) return c.json({ error: "code_expired" }, 400);
+  if (row.status !== "pending") return c.json({ error: "code_used" }, 400);
+
+  const oauthApp = await c.env.DB.prepare(
+    "SELECT * FROM oauth_apps WHERE client_id = ? AND is_active = 1",
+  )
+    .bind(row.client_id)
+    .first<OAuthAppRow>();
+  if (!oauthApp) return c.json({ error: "invalid_client" }, 400);
+
+  if (body.action === "deny") {
+    await c.env.DB.prepare(
+      "UPDATE device_codes SET status = 'denied' WHERE id = ?",
+    )
+      .bind(row.id)
+      .run();
+    return c.json({ message: "Access denied" });
+  }
+
+  const allowedScopes = JSON.parse(oauthApp.allowed_scopes) as string[];
+  const { scopes } = await resolveRequestedScopes(
+    c.env.DB,
+    c.env.APP_URL,
+    JSON.parse(row.scope) as string[],
+    allowedScopes,
+    oauthApp.client_id,
+  );
+
+  // Site-scope gate
+  if (hasSiteScopes(scopes)) {
+    if (user.role !== "admin") {
+      return c.json({ error: "site_scope_admin_required" }, 403);
+    }
+    let twoFaOk = false;
+    if (body.passkey_verify_token) {
+      const kvKey = `passkey_site_verify:${user.id}:${body.passkey_verify_token}`;
+      const stored = await c.env.KV_CACHE.get(kvKey);
+      if (stored) {
+        await c.env.KV_CACHE.delete(kvKey);
+        twoFaOk = true;
+      }
+    } else if (body.totp_code) {
+      twoFaOk = await verifyAnyTotp(c.env, user.id, body.totp_code);
+    }
+    if (!twoFaOk) return c.json({ error: "site_scope_totp_invalid" }, 400);
+    if (body.confirm_text?.trim().toLowerCase() !== SITE_SCOPE_CONFIRM_PHRASE) {
+      return c.json({ error: "site_scope_confirm_required" }, 400);
+    }
+  }
+
+  // Team-scope gate
+  let boundScopes = scopes;
+  if (hasUnboundTeamScopes(scopes)) {
+    if (!body.team_id) return c.json({ error: "team_id_required" }, 400);
+    const effective = await getEffectiveMember(c.env.DB, body.team_id, user.id);
+    if (
+      !effective ||
+      !["owner", "co-owner", "admin"].includes(effective.role)
+    ) {
+      return c.json({ error: "team_scope_forbidden" }, 403);
+    }
+    if (
+      scopes.includes("team:delete") &&
+      !["owner", "co-owner"].includes(effective.role)
+    ) {
+      return c.json({ error: "team_scope_owner_required" }, 403);
+    }
+    boundScopes = bindTeamScopes(scopes, body.team_id);
+  }
+
+  // Store consent
+  await c.env.DB.prepare(
+    `INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, client_id) DO UPDATE SET scopes = excluded.scopes, granted_at = excluded.granted_at`,
+  )
+    .bind(randomId(), user.id, row.client_id, JSON.stringify(boundScopes), now)
+    .run();
+
+  // Mark device code as authorized
+  const updated = await c.env.DB.prepare(
+    "UPDATE device_codes SET status = 'authorized', user_id = ?, scope = ? WHERE id = ? AND status = 'pending'",
+  )
+    .bind(user.id, JSON.stringify(boundScopes), row.id)
+    .run();
+  if (!updated.meta.changes) return c.json({ error: "code_used" }, 400);
+
+  c.executionCtx.waitUntil(
+    Promise.all([
+      deliverAppEvent(c.env, oauthApp.id, "user.token_granted", {
+        user_id: user.id,
+        scopes: boundScopes,
+        granted_at: now,
+      }).catch(() => {}),
+      deliverUserEmailNotifications(
+        c.env,
+        user.id,
+        "oauth.consent_granted",
+        {
+          app_name: oauthApp.name,
+          scopes: boundScopes,
+          ...notificationActorMetaFromHeaders(c.req.raw.headers),
+        },
+        c.env.APP_URL,
+      ).catch(() => {}),
+    ]),
+  );
+
+  return c.json({ message: "Access granted" });
+});
+
+// GET /api/oauth/device/sse — SSE stream for device code status updates
+// Client authenticates via client_id + client_secret (Basic) or query params
+app.get("/device/sse", async (c) => {
+  let authHeader = c.req.header("Authorization");
+  if (!authHeader) {
+    const qs = new URL(c.req.url).searchParams;
+    const qsClientId = qs.get("client_id");
+    const qsSecret = qs.get("client_secret");
+    if (qsClientId && qsSecret) {
+      authHeader = `Basic ${btoa(`${qsClientId}:${qsSecret}`)}`;
+    }
+  }
+
+  let clientId: string | undefined;
+  let clientSecret: string | undefined;
+  if (authHeader?.startsWith("Basic ")) {
+    const decoded = atob(authHeader.slice(6));
+    const [id, secret] = decoded.split(":");
+    clientId = id;
+    clientSecret = secret;
+  }
+  if (!clientId) return c.json({ error: "invalid_request" }, 400);
+
+  const oauthApp = await c.env.DB.prepare(
+    "SELECT * FROM oauth_apps WHERE client_id = ? AND is_active = 1",
+  )
+    .bind(clientId)
+    .first<OAuthAppRow>();
+  if (!oauthApp) return c.json({ error: "invalid_client" }, 401);
+
+  if (!oauthApp.is_public) {
+    if (
+      !oauthApp.client_secret ||
+      !clientSecret ||
+      !(await timingSafeSecretEqual(
+        c.env,
+        oauthApp.client_secret,
+        clientSecret,
+      ))
+    ) {
+      return c.json({ error: "invalid_client" }, 401);
+    }
+  }
+
+  const deviceCode = c.req.query("device_code");
+  if (!deviceCode) return c.json({ error: "invalid_request" }, 400);
+
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM device_codes WHERE device_code = ? AND client_id = ?",
+  )
+    .bind(deviceCode, clientId)
+    .first<import("../types").DeviceCodeRow>();
+  if (!row) return c.json({ error: "invalid_device_code" }, 404);
+
+  const enc = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (chunk: string) => {
+        try {
+          controller.enqueue(enc.encode(chunk));
+        } catch {
+          /* stream closed */
+        }
+      };
+
+      send(`: connected\n\n`);
+
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2_000));
+
+        try {
+          const current = await c.env.DB.prepare(
+            "SELECT status, user_id, scope FROM device_codes WHERE id = ?",
+          )
+            .bind(row.id)
+            .first<{ status: string; user_id: string | null; scope: string }>();
+
+          if (!current) {
+            send(`event: error\ndata: {"error":"device_code_not_found"}\n\n`);
+            controller.close();
+            return;
+          }
+
+          const now = Math.floor(Date.now() / 1000);
+          if (row.expires_at < now) {
+            send(`event: expired\ndata: {"error":"expired"}\n\n`);
+            controller.close();
+            return;
+          }
+
+          if (current.status === "authorized") {
+            send(
+              `event: authorized\ndata: ${JSON.stringify({ user_id: current.user_id, scope: JSON.parse(current.scope) })}\n\n`,
+            );
+            controller.close();
+            return;
+          }
+
+          if (current.status === "denied") {
+            send(`event: denied\ndata: {"error":"access_denied"}\n\n`);
+            controller.close();
+            return;
+          }
+
+          send(": heartbeat\n\n");
+        } catch {
+          controller.close();
+          return;
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    },
+  });
+});
+
 // ─── Token endpoint ──────────────────────────────────────────────────────────
 
 app.post("/token", async (c) => {
@@ -1963,6 +2443,167 @@ app.post("/token", async (c) => {
       scope: scopes.join(" "),
       refresh_token,
     });
+  }
+
+  // ── Device Code grant (RFC 8628) ──────────────────────────────────────────
+  if (grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
+    const deviceCode = params.device_code;
+    if (!deviceCode) return c.json({ error: "invalid_request" }, 400);
+
+    const now = Math.floor(Date.now() / 1000);
+    const row = await c.env.DB.prepare(
+      "SELECT * FROM device_codes WHERE device_code = ? AND client_id = ?",
+    )
+      .bind(deviceCode, clientId)
+      .first<import("../types").DeviceCodeRow>();
+
+    if (!row) return c.json({ error: "invalid_grant" }, 400);
+
+    if (row.expires_at < now) {
+      await c.env.DB.prepare(
+        "UPDATE device_codes SET status = 'expired' WHERE id = ? AND status = 'pending'",
+      )
+        .bind(row.id)
+        .run();
+      return c.json({ error: "expired_token" }, 400);
+    }
+
+    if (row.status === "denied") {
+      return c.json({ error: "access_denied" }, 400);
+    }
+
+    if (row.status === "pending") {
+      // Slow down detection
+      if (row.last_polled_at && now - row.last_polled_at < row.interval) {
+        return c.json({ error: "slow_down" }, 400);
+      }
+      await c.env.DB.prepare(
+        "UPDATE device_codes SET last_polled_at = ? WHERE id = ?",
+      )
+        .bind(now, row.id)
+        .run();
+      return c.json({ error: "authorization_pending" }, 400);
+    }
+
+    if (row.status !== "authorized" || !row.user_id) {
+      return c.json({ error: "invalid_grant" }, 400);
+    }
+
+    // Consume the device code (single-use)
+    const consumed = await c.env.DB.prepare(
+      "DELETE FROM device_codes WHERE id = ? AND status = 'authorized'",
+    )
+      .bind(row.id)
+      .run();
+    if (!consumed.meta.changes) return c.json({ error: "invalid_grant" }, 400);
+
+    const user = await c.env.DB.prepare(
+      "SELECT * FROM users WHERE id = ? AND kind = 'user'",
+    )
+      .bind(row.user_id)
+      .first<UserRow>();
+    if (!user || !user.is_active)
+      return c.json({ error: "invalid_grant" }, 400);
+
+    // PKCE verification if provided
+    if (row.code_challenge) {
+      const dCodeVerifier = params.code_verifier;
+      if (!dCodeVerifier)
+        return c.json(
+          {
+            error: "invalid_grant",
+            error_description: "code_verifier required",
+          },
+          400,
+        );
+      const pkceOk = await verifyPkce(
+        dCodeVerifier,
+        row.code_challenge,
+        row.code_challenge_method ?? "S256",
+      );
+      if (!pkceOk)
+        return c.json(
+          {
+            error: "invalid_grant",
+            error_description: "PKCE verification failed",
+          },
+          400,
+        );
+    }
+
+    const scopes = JSON.parse(row.scope) as string[];
+    const hasOffline = scopes.includes("offline_access");
+    const atTtl =
+      (user.access_token_ttl_minutes ?? config.access_token_ttl_minutes) * 60;
+    const rtTtl =
+      (user.refresh_token_ttl_days ?? config.refresh_token_ttl_days) *
+      24 *
+      60 *
+      60;
+    const refreshToken = hasOffline ? randomBase64url(48) : null;
+
+    const jti = randomId();
+    let accessToken: string;
+    if (oauthApp.use_jwt_tokens) {
+      const mldsaKey = await getMLDSAKey(c.env.KV_SESSIONS);
+      accessToken = signAccessToken(
+        {
+          iss: c.env.APP_URL,
+          sub: user.id,
+          aud: extractAud(scopes, c.env.APP_URL),
+          client_id: clientId,
+          jti,
+          scope: scopes.join(" "),
+        },
+        mldsaKey.secretKey,
+        mldsaKey.kid,
+        atTtl,
+      );
+    } else {
+      accessToken = randomBase64url(48);
+    }
+
+    const storedAccess = await hashSecret(c.env, accessToken);
+    const storedRefresh = await hashSecret(c.env, refreshToken);
+    await c.env.DB.prepare(
+      `INSERT INTO oauth_tokens (id, access_token, refresh_token, client_id, user_id, scopes, expires_at, refresh_expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        jti,
+        storedAccess,
+        storedRefresh,
+        clientId,
+        user.id,
+        JSON.stringify(scopes),
+        now + atTtl,
+        hasOffline ? now + rtTtl : null,
+        now,
+      )
+      .run();
+
+    const response: Record<string, unknown> = {
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: atTtl,
+      scope: scopes.join(" "),
+    };
+    if (refreshToken) response.refresh_token = refreshToken;
+    if (scopes.includes("openid")) {
+      const rsaKeyPair = await getRsaKeyPair(c.env.KV_SESSIONS);
+      response.id_token = await buildIdToken(
+        user,
+        clientId,
+        scopes,
+        null,
+        rsaKeyPair.privateKey,
+        rsaKeyPair.kid,
+        atTtl,
+        c.env.APP_URL,
+        c.env.DB,
+      );
+    }
+    return c.json(response);
   }
 
   return c.json({ error: "unsupported_grant_type" }, 400);

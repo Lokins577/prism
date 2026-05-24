@@ -696,6 +696,22 @@ export const api = {
   oauthApprove: (body: OAuthApproveBody) =>
     request<{ redirect: string }>("POST", "/oauth/authorize", body, getToken()),
 
+  // ─── OAuth device code ───────────────────────────────────────────────────
+  deviceCodeVerify: (params: Record<string, string>) =>
+    request<DeviceCodeVerifyInfo>(
+      "GET",
+      `/oauth/device/verify?${new URLSearchParams(params)}`,
+      undefined,
+      getToken(),
+    ),
+  deviceCodeAuthorize: (body: DeviceCodeAuthorizeBody) =>
+    request<{ message: string }>(
+      "POST",
+      "/oauth/device/authorize",
+      body,
+      getToken(),
+    ),
+
   // ─── OAuth 2FA step-up ───────────────────────────────────────────────────
   oauth2faInfo: (params: Record<string, string>) =>
     request<OAuth2FAInfo>(
@@ -2501,4 +2517,48 @@ export interface AppScopeAccessRule {
   rule_type: "owner_allow" | "owner_deny" | "app_allow" | "app_deny";
   target_id: string;
   created_at: number;
+}
+
+export interface DeviceCodeVerifyInfo {
+  app: {
+    id: string;
+    name: string;
+    description: string;
+    icon_url: string | null;
+    unproxied_icon_url: string | null;
+    website_url: string | null;
+    is_verified: boolean;
+    is_official: boolean;
+    is_first_party: boolean;
+    is_public: boolean;
+  };
+  user_code: string;
+  scopes: string[];
+  optional_scopes: string[];
+  expires_at: number;
+  user: {
+    id: string;
+    username: string;
+    display_name: string;
+    role: string;
+  } | null;
+  requires_site_grant: boolean;
+  site_scope_confirm_phrase: string | null;
+  requires_team_grant: boolean;
+  team_grant_permissions: string[];
+  user_admin_teams: Array<{
+    id: string;
+    name: string;
+    avatar_url: string | null;
+    role: string;
+  }>;
+}
+
+export interface DeviceCodeAuthorizeBody {
+  user_code: string;
+  action: "approve" | "deny";
+  totp_code?: string;
+  passkey_verify_token?: string;
+  confirm_text?: string;
+  team_id?: string;
 }
