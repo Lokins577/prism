@@ -1690,12 +1690,20 @@ const DEVICE_CODE_TTL = 600; // 10 minutes
 const DEVICE_CODE_INTERVAL = 5; // polling interval in seconds
 const USER_CODE_CHARSET = "BCDFGHJKLMNPQRSTVWXZ"; // no vowels (avoids bad words), no ambiguous chars
 const USER_CODE_LENGTH = 8; // yields 8 chars displayed as XXXX-XXXX
+const USER_CODE_MAX_BYTE =
+  Math.floor(256 / USER_CODE_CHARSET.length) * USER_CODE_CHARSET.length; // rejection sampling ceiling
 
 function generateUserCode(): string {
-  const arr = crypto.getRandomValues(new Uint8Array(USER_CODE_LENGTH));
   let code = "";
-  for (let i = 0; i < USER_CODE_LENGTH; i++) {
-    code += USER_CODE_CHARSET[arr[i] % USER_CODE_CHARSET.length];
+  while (code.length < USER_CODE_LENGTH) {
+    const arr = crypto.getRandomValues(
+      new Uint8Array(USER_CODE_LENGTH - code.length + 4),
+    );
+    for (const b of arr) {
+      if (b >= USER_CODE_MAX_BYTE) continue; // reject to avoid modulo bias
+      code += USER_CODE_CHARSET[b % USER_CODE_CHARSET.length];
+      if (code.length === USER_CODE_LENGTH) break;
+    }
   }
   return code;
 }
@@ -1769,25 +1777,35 @@ app.post("/device/code", async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const id = randomId();
   const deviceCode = randomBase64url(32);
-  const userCode = generateUserCode();
+  const storedDeviceCode = await hashSecret(c.env, deviceCode);
 
-  await c.env.DB.prepare(
-    `INSERT INTO device_codes (id, device_code, user_code, client_id, scope, status, code_challenge, code_challenge_method, interval, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      deviceCode,
-      userCode,
-      clientId,
-      JSON.stringify(scopes),
-      params.code_challenge ?? null,
-      params.code_challenge_method ?? null,
-      DEVICE_CODE_INTERVAL,
-      now + DEVICE_CODE_TTL,
-      now,
-    )
-    .run();
+  // Retry user_code generation on (unlikely) UNIQUE collision
+  let userCode: string;
+  for (let attempt = 0; ; attempt++) {
+    userCode = generateUserCode();
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO device_codes (id, device_code, user_code, client_id, scope, status, code_challenge, code_challenge_method, interval, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+      )
+        .bind(
+          id,
+          storedDeviceCode,
+          userCode,
+          clientId,
+          JSON.stringify(scopes),
+          params.code_challenge ?? null,
+          params.code_challenge_method ?? null,
+          DEVICE_CODE_INTERVAL,
+          now + DEVICE_CODE_TTL,
+          now,
+        )
+        .run();
+      break;
+    } catch {
+      if (attempt >= 3) return c.json({ error: "server_error" }, 500);
+    }
+  }
 
   return c.json({
     device_code: deviceCode,
@@ -1803,6 +1821,13 @@ app.post("/device/code", async (c) => {
 app.get("/device/verify", optionalAuth, async (c) => {
   const rawCode = c.req.query("user_code");
   if (!rawCode) return c.json({ error: "invalid_request" }, 400);
+
+  const ip =
+    c.req.header("CF-Connecting-IP") ??
+    c.req.header("X-Forwarded-For") ??
+    "unknown";
+  const rl = await rateLimit(c.env.KV_CACHE, `device-verify:${ip}`, 20, 60);
+  if (!rl.allowed) return c.json({ error: "rate_limited" }, 429);
 
   const userCode = rawCode.replace(/-/g, "").toUpperCase();
 
@@ -1824,15 +1849,25 @@ app.get("/device/verify", optionalAuth, async (c) => {
     .first<OAuthAppRow>();
   if (!oauthApp) return c.json({ error: "invalid_client" }, 400);
 
-  const isVerified = await computeIsVerified(
-    c.env.DB,
-    oauthApp.owner_id,
-    oauthApp.website_url,
-    oauthApp.redirect_uris,
-    oauthApp.team_id,
-  );
+  const requestedScopes = JSON.parse(row.scope) as string[];
+  const allowedScopes = JSON.parse(oauthApp.allowed_scopes) as string[];
+  const [{ scopes, appScopes, rejected }, isVerified] = await Promise.all([
+    resolveRequestedScopes(
+      c.env.DB,
+      c.env.APP_URL,
+      requestedScopes,
+      allowedScopes,
+      oauthApp.client_id,
+    ),
+    computeIsVerified(
+      c.env.DB,
+      oauthApp.owner_id,
+      oauthApp.website_url,
+      oauthApp.redirect_uris,
+      oauthApp.team_id,
+    ),
+  ]);
 
-  const scopes = JSON.parse(row.scope) as string[];
   const needsTeamGrant = hasUnboundTeamScopes(scopes);
   let userAdminTeams: Array<{
     id: string;
@@ -1874,6 +1909,24 @@ app.get("/device/verify", optionalAuth, async (c) => {
   ) as string[];
   const optionalScopes = scopes.filter((s) => appOptionalScopes.includes(s));
 
+  let sitesScopesGrantable = false;
+  const currentUser = c.get("user");
+  if (hasSiteScopes(scopes) && currentUser?.role === "admin") {
+    const [totpRow, passkeyRow] = await Promise.all([
+      c.env.DB.prepare(
+        "SELECT id FROM totp_authenticators WHERE user_id = ? AND enabled = 1 LIMIT 1",
+      )
+        .bind(currentUser.id)
+        .first<{ id: string }>(),
+      c.env.DB.prepare(
+        "SELECT credential_id FROM passkeys WHERE user_id = ? LIMIT 1",
+      )
+        .bind(currentUser.id)
+        .first<{ credential_id: string }>(),
+    ]);
+    sitesScopesGrantable = !!(totpRow ?? passkeyRow);
+  }
+
   return c.json({
     app: {
       id: oauthApp.id,
@@ -1890,12 +1943,15 @@ app.get("/device/verify", optionalAuth, async (c) => {
     user_code: formatUserCode(row.user_code),
     scopes,
     optional_scopes: optionalScopes,
+    app_scopes: appScopes,
+    rejected_scopes: rejected,
     expires_at: row.expires_at,
     user: c.get("user") ?? null,
     requires_site_grant: hasSiteScopes(scopes),
     site_scope_confirm_phrase: hasSiteScopes(scopes)
       ? SITE_SCOPE_CONFIRM_PHRASE
       : null,
+    site_scopes_grantable: sitesScopesGrantable,
     requires_team_grant: needsTeamGrant,
     team_grant_permissions: needsTeamGrant
       ? unboundTeamPermissions(scopes)
@@ -1907,9 +1963,14 @@ app.get("/device/verify", optionalAuth, async (c) => {
 // POST /api/oauth/device/authorize — user approves or denies
 app.post("/device/authorize", requireAuth, async (c) => {
   const user = c.get("user");
+
+  const rl = await rateLimit(c.env.KV_CACHE, `device-authz:${user.id}`, 10, 60);
+  if (!rl.allowed) return c.json({ error: "rate_limited" }, 429);
+
   const body = await c.req.json<{
     user_code: string;
     action: "approve" | "deny";
+    scope?: string;
     totp_code?: string;
     passkey_verify_token?: string;
     confirm_text?: string;
@@ -1940,18 +2001,23 @@ app.post("/device/authorize", requireAuth, async (c) => {
 
   if (body.action === "deny") {
     await c.env.DB.prepare(
-      "UPDATE device_codes SET status = 'denied' WHERE id = ?",
+      "UPDATE device_codes SET status = 'denied' WHERE id = ? AND status = 'pending'",
     )
       .bind(row.id)
       .run();
     return c.json({ message: "Access denied" });
   }
 
+  // Use the scope from the body (user may have declined optional scopes)
+  // or fall back to the original requested scopes.
+  const requestedScopes = body.scope
+    ? (body.scope ?? "").split(" ").filter(Boolean)
+    : (JSON.parse(row.scope) as string[]);
   const allowedScopes = JSON.parse(oauthApp.allowed_scopes) as string[];
   const { scopes } = await resolveRequestedScopes(
     c.env.DB,
     c.env.APP_URL,
-    JSON.parse(row.scope) as string[],
+    requestedScopes,
     allowedScopes,
     oauthApp.client_id,
   );
@@ -1996,9 +2062,28 @@ app.post("/device/authorize", requireAuth, async (c) => {
       return c.json({ error: "team_scope_owner_required" }, 403);
     }
     boundScopes = bindTeamScopes(scopes, body.team_id);
+
+    await c.env.DB.prepare(
+      `INSERT INTO team_scope_grants (id, grantor_user_id, team_id, client_id, permissions, granted_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        randomId(),
+        user.id,
+        body.team_id,
+        row.client_id,
+        JSON.stringify(
+          scopes
+            .map((s) => parseUnboundTeamScope(s))
+            .filter((p): p is string => p !== null),
+        ),
+        now,
+      )
+      .run();
   }
 
   // Store consent
+  const siteScopes = boundScopes.filter((s) => SITE_SCOPES.has(s));
   await c.env.DB.prepare(
     `INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)
      VALUES (?, ?, ?, ?, ?)
@@ -2006,6 +2091,22 @@ app.post("/device/authorize", requireAuth, async (c) => {
   )
     .bind(randomId(), user.id, row.client_id, JSON.stringify(boundScopes), now)
     .run();
+
+  if (siteScopes.length > 0) {
+    await c.env.DB.prepare(
+      `INSERT INTO site_scope_grants (id, admin_user_id, grantee_user_id, client_id, scopes, granted_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        randomId(),
+        user.id,
+        user.id,
+        row.client_id,
+        JSON.stringify(siteScopes),
+        now,
+      )
+      .run();
+  }
 
   // Mark device code as authorized
   const updated = await c.env.DB.prepare(
@@ -2086,10 +2187,12 @@ app.get("/device/sse", async (c) => {
   const deviceCode = c.req.query("device_code");
   if (!deviceCode) return c.json({ error: "invalid_request" }, 400);
 
+  const deviceCodeLookup = await hashLookupCandidate(c.env, deviceCode);
+  if (!deviceCodeLookup) return c.json({ error: "invalid_device_code" }, 404);
   const row = await c.env.DB.prepare(
-    "SELECT * FROM device_codes WHERE device_code = ? AND client_id = ?",
+    "SELECT * FROM device_codes WHERE (device_code = ? OR device_code = ?) AND client_id = ?",
   )
-    .bind(deviceCode, clientId)
+    .bind(deviceCode, deviceCodeLookup, clientId)
     .first<import("../types").DeviceCodeRow>();
   if (!row) return c.json({ error: "invalid_device_code" }, 404);
 
@@ -2451,10 +2554,12 @@ app.post("/token", async (c) => {
     if (!deviceCode) return c.json({ error: "invalid_request" }, 400);
 
     const now = Math.floor(Date.now() / 1000);
+    const deviceCodeLookup = await hashLookupCandidate(c.env, deviceCode);
+    if (!deviceCodeLookup) return c.json({ error: "invalid_grant" }, 400);
     const row = await c.env.DB.prepare(
-      "SELECT * FROM device_codes WHERE device_code = ? AND client_id = ?",
+      "SELECT * FROM device_codes WHERE (device_code = ? OR device_code = ?) AND client_id = ?",
     )
-      .bind(deviceCode, clientId)
+      .bind(deviceCode, deviceCodeLookup, clientId)
       .first<import("../types").DeviceCodeRow>();
 
     if (!row) return c.json({ error: "invalid_grant" }, 400);

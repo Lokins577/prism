@@ -30,6 +30,7 @@ CREATE TABLE device_codes (
   created_at  INTEGER NOT NULL
 );
 
-CREATE INDEX idx_device_codes_user_code ON device_codes(user_code);
-CREATE INDEX idx_device_codes_device_code ON device_codes(device_code);
+-- user_code and device_code already have implicit indexes from UNIQUE.
+-- Only add indexes that serve queries not covered by those.
 CREATE INDEX idx_device_codes_expires ON device_codes(expires_at);
+CREATE INDEX idx_device_codes_client_id ON device_codes(client_id);

@@ -106,6 +106,12 @@ export default {
     ctx.waitUntil(purgeAppEventQueue(env.DB).catch(() => {}));
     ctx.waitUntil(sweepExpiredPowUsed(env.DB).catch(() => {}));
     ctx.waitUntil(sweepOrphanedImageProxyMappings(env.DB).catch(() => {}));
+    ctx.waitUntil(
+      env.DB.prepare("DELETE FROM device_codes WHERE expires_at < ?")
+        .bind(Math.floor(Date.now() / 1000))
+        .run()
+        .catch(() => {}),
+    );
   },
 
   email: handleEmailWorker,

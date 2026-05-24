@@ -2535,6 +2535,16 @@ export interface DeviceCodeVerifyInfo {
   user_code: string;
   scopes: string[];
   optional_scopes: string[];
+  app_scopes: Array<{
+    scope: string;
+    client_id: string;
+    inner_scope: string;
+    app_name: string;
+    app_icon_url: string | null;
+    scope_title: string | null;
+    scope_desc: string | null;
+  }>;
+  rejected_scopes: Array<{ scope: string; reason: string }>;
   expires_at: number;
   user: {
     id: string;
@@ -2544,6 +2554,7 @@ export interface DeviceCodeVerifyInfo {
   } | null;
   requires_site_grant: boolean;
   site_scope_confirm_phrase: string | null;
+  site_scopes_grantable: boolean;
   requires_team_grant: boolean;
   team_grant_permissions: string[];
   user_admin_teams: Array<{
@@ -2557,6 +2568,7 @@ export interface DeviceCodeVerifyInfo {
 export interface DeviceCodeAuthorizeBody {
   user_code: string;
   action: "approve" | "deny";
+  scope?: string;
   totp_code?: string;
   passkey_verify_token?: string;
   confirm_text?: string;

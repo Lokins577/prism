@@ -225,9 +225,11 @@ export function DeviceVerify() {
     setTeamScopeError(null);
     setLoading(true);
     try {
+      const approvedScopes = data.scopes.filter((s) => !declinedScopes.has(s));
       await api.deviceCodeAuthorize({
         user_code: data.user_code,
         action,
+        scope: approvedScopes.join(" "),
         ...(requiresSiteGrant && action === "approve"
           ? {
               ...(twoFaMode === "passkey"
