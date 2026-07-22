@@ -11,6 +11,7 @@ import { randomId } from "../lib/crypto";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto";
 import { validateOutboundUrl } from "../lib/safeFetch";
 import { getEffectiveMember } from "./teams";
+import { recordAudit, auditRequestMeta } from "../lib/audit";
 import type { AuditScope, AuditEventRow } from "../lib/audit";
 import type { Variables } from "../types";
 
@@ -137,6 +138,10 @@ interface AuditWebhookRow {
   is_active: number;
   created_at: number;
   updated_at: number;
+  last_delivery_at: number | null;
+  last_delivery_success: number | null;
+  last_delivery_status: number | null;
+  last_delivery_body: string | null;
 }
 
 /** Mask secret fields before returning a webhook config to its owner. */
@@ -215,6 +220,15 @@ function publicWebhook(row: AuditWebhookRow, config: Record<string, unknown>) {
     is_active: row.is_active === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    last_delivery:
+      row.last_delivery_at != null
+        ? {
+            at: row.last_delivery_at,
+            success: row.last_delivery_success === 1,
+            status: row.last_delivery_status,
+            body: row.last_delivery_body ?? "",
+          }
+        : null,
   };
 }
 
@@ -243,13 +257,50 @@ interface WebhookBody {
   is_active?: boolean;
 }
 
+/**
+ * Record a webhook lifecycle event (create / update / delete) in the same
+ * scope as the webhook itself. The delivery is awaited so the affected hook
+ * receives its own event: for create / update this doubles as a live test,
+ * and for delete it must run before the row is removed. The caller controls
+ * ordering by invoking this after an insert/update but *before* a delete.
+ */
+async function recordWebhookLifecycle(
+  c: import("hono").Context<AppEnv>,
+  scope: AuditScope,
+  scopeId: string | null,
+  action: string,
+  wh: { id: string; name: string; kind: string },
+): Promise<void> {
+  const actor = c.get("user");
+  const meta = auditRequestMeta(c);
+  await recordAudit(
+    c.env,
+    c.executionCtx,
+    {
+      scope,
+      scopeId,
+      action,
+      actorId: actor.id,
+      actorName: actor.username,
+      resourceType: "webhook",
+      resourceId: wh.id,
+      resourceName: wh.name,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      metadata: { name: wh.name, kind: wh.kind },
+    },
+    { awaitDelivery: true },
+  );
+}
+
 async function createWebhook(
-  env: Env,
+  c: import("hono").Context<AppEnv>,
   scope: AuditScope,
   scopeId: string | null,
   createdBy: string,
   body: WebhookBody,
 ): Promise<{ error?: string; status?: number; webhook?: unknown }> {
+  const env = c.env;
   const kind = String(body.kind ?? "");
   if (!WEBHOOK_KINDS.has(kind)) return { error: "invalid kind", status: 400 };
   if (!body.name?.trim()) return { error: "name is required", status: 400 };
@@ -281,6 +332,13 @@ async function createWebhook(
     )
     .run();
 
+  // Record after the row exists so the new hook receives its own event.
+  await recordWebhookLifecycle(c, scope, scopeId, "webhook.create", {
+    id,
+    name: body.name.trim(),
+    kind,
+  });
+
   const row = await env.DB.prepare("SELECT * FROM audit_webhooks WHERE id = ?")
     .bind(id)
     .first<AuditWebhookRow>();
@@ -288,12 +346,13 @@ async function createWebhook(
 }
 
 async function updateWebhook(
-  env: Env,
+  c: import("hono").Context<AppEnv>,
   scope: AuditScope,
   scopeId: string | null,
   id: string,
   body: WebhookBody,
 ): Promise<{ error?: string; status?: number; webhook?: unknown }> {
+  const env = c.env;
   const row = await env.DB.prepare(
     scopeId === null
       ? "SELECT * FROM audit_webhooks WHERE id = ? AND scope = ? AND scope_id IS NULL"
@@ -317,12 +376,13 @@ async function updateWebhook(
       ? JSON.stringify(body.events.length ? body.events : ["*"])
       : row.events;
   const encrypted = await encryptSecret(env, JSON.stringify(config));
+  const name = body.name?.trim() ?? row.name;
 
   await env.DB.prepare(
     "UPDATE audit_webhooks SET name = ?, config = ?, events = ?, is_active = ?, updated_at = ? WHERE id = ?",
   )
     .bind(
-      body.name?.trim() ?? row.name,
+      name,
       encrypted,
       events,
       body.is_active === undefined ? row.is_active : body.is_active ? 1 : 0,
@@ -330,6 +390,13 @@ async function updateWebhook(
       id,
     )
     .run();
+
+  // Record after the update so the edited hook is tested with its new config.
+  await recordWebhookLifecycle(c, scope, scopeId, "webhook.update", {
+    id,
+    name,
+    kind,
+  });
 
   const updated = await env.DB.prepare(
     "SELECT * FROM audit_webhooks WHERE id = ?",
@@ -342,11 +409,25 @@ async function updateWebhook(
 }
 
 async function deleteWebhook(
-  env: Env,
+  c: import("hono").Context<AppEnv>,
   scope: AuditScope,
   scopeId: string | null,
   id: string,
 ): Promise<boolean> {
+  const env = c.env;
+  const row = await env.DB.prepare(
+    scopeId === null
+      ? "SELECT id, name, kind FROM audit_webhooks WHERE id = ? AND scope = ? AND scope_id IS NULL"
+      : "SELECT id, name, kind FROM audit_webhooks WHERE id = ? AND scope = ? AND scope_id = ?",
+  )
+    .bind(...(scopeId === null ? [id, scope] : [id, scope, scopeId]))
+    .first<{ id: string; name: string; kind: string }>();
+  if (!row) return false;
+
+  // Record (and deliver) *before* removing the row so the hook still exists
+  // to receive its own farewell event.
+  await recordWebhookLifecycle(c, scope, scopeId, "webhook.delete", row);
+
   const res = await env.DB.prepare(
     scopeId === null
       ? "DELETE FROM audit_webhooks WHERE id = ? AND scope = ? AND scope_id IS NULL"
@@ -392,7 +473,7 @@ function registerScope(
     if (!r.ok) return c.json({ error: "Forbidden" }, 403);
     const body = await c.req.json<WebhookBody>();
     const res = await createWebhook(
-      c.env,
+      c,
       r.scope,
       r.scopeId,
       c.get("user").id,
@@ -408,7 +489,7 @@ function registerScope(
     if (!r.ok) return c.json({ error: "Forbidden" }, 403);
     const body = await c.req.json<WebhookBody>();
     const res = await updateWebhook(
-      c.env,
+      c,
       r.scope,
       r.scopeId,
       c.req.param("id"),
@@ -422,12 +503,7 @@ function registerScope(
   app.delete(`${base}/webhooks/:id`, async (c) => {
     const r = await resolveScope(c);
     if (!r.ok) return c.json({ error: "Forbidden" }, 403);
-    const ok = await deleteWebhook(
-      c.env,
-      r.scope,
-      r.scopeId,
-      c.req.param("id"),
-    );
+    const ok = await deleteWebhook(c, r.scope, r.scopeId, c.req.param("id"));
     if (!ok) return c.json({ error: "Not found" }, 404);
     return c.json({ message: "Deleted" });
   });

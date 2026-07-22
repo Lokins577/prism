@@ -55,11 +55,17 @@ const DELIVERY_TIMEOUT_MS = 10_000;
  * Never throws — failures are swallowed so a logging hiccup can't break the
  * request it is observing. Call inside ctx.waitUntil for non-blocking writes,
  * or await it when ordering matters.
+ *
+ * Pass `opts.awaitDelivery` to block on the webhook fan-out instead of
+ * deferring it to ctx.waitUntil. Webhook lifecycle events use this so the
+ * newly-created / edited hook actually receives its own event (a live test)
+ * and, for deletions, so delivery completes before the row is removed.
  */
 export async function recordAudit(
   env: Env,
   ctx: ExecutionContext | { waitUntil: (p: Promise<unknown>) => void },
   inputs: AuditInput | AuditInput[],
+  opts: { awaitDelivery?: boolean } = {},
 ): Promise<void> {
   const list = Array.isArray(inputs) ? inputs : [inputs];
   const now = Math.floor(Date.now() / 1000);
@@ -89,11 +95,13 @@ export async function recordAudit(
         )
         .run();
 
-      ctx.waitUntil(
-        deliverAuditWebhooks(env, { ...input, id, created_at: now }).catch(
-          () => {},
-        ),
-      );
+      const delivery = deliverAuditWebhooks(env, {
+        ...input,
+        id,
+        created_at: now,
+      }).catch(() => {});
+      if (opts.awaitDelivery) await delivery;
+      else ctx.waitUntil(delivery);
     }
   } catch {
     // swallow — auditing must never break the observed request
@@ -125,6 +133,81 @@ interface DeliveredEvent extends AuditInput {
   created_at: number;
 }
 
+// Avatar shown alongside Discord webhook messages.
+const DISCORD_AVATAR_URL =
+  "https://icons.siiway.org/glint/border/android-chrome-512x512.png";
+
+// How much of the response body to persist for the "last push" summary. The
+// UI truncates further based on the viewer's available width.
+const MAX_STORED_BODY = 512;
+
+interface DeliveryOutcome {
+  success: boolean;
+  status: number | null;
+  body: string;
+}
+
+/** Convert a glob-style event filter (supporting `*` / `?`) to a RegExp. */
+function globToRegExp(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * True when `action` matches any of the configured event patterns. Patterns
+ * may be literal action names (`app.create`), `*` (all), or fnmatch-style
+ * globs (`app.*`, `team.member.*`).
+ */
+export function matchesEventPattern(
+  patterns: string[],
+  action: string,
+): boolean {
+  return patterns.some((p) => {
+    if (p === "*" || p === action) return true;
+    if (!p.includes("*") && !p.includes("?")) return false;
+    try {
+      return globToRegExp(p).test(action);
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function summarizeResponse(res: Response): Promise<DeliveryOutcome> {
+  let body: string;
+  try {
+    body = (await res.text()).slice(0, MAX_STORED_BODY);
+  } catch {
+    body = "";
+  }
+  return { success: res.ok, status: res.status, body };
+}
+
+async function recordDelivery(
+  env: Env,
+  id: string,
+  outcome: DeliveryOutcome,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE audit_webhooks
+        SET last_delivery_at = ?, last_delivery_success = ?,
+            last_delivery_status = ?, last_delivery_body = ?
+      WHERE id = ?`,
+  )
+    .bind(
+      Math.floor(Date.now() / 1000),
+      outcome.success ? 1 : 0,
+      outcome.status,
+      outcome.body,
+      id,
+    )
+    .run()
+    .catch(() => {});
+}
+
 async function deliverAuditWebhooks(
   env: Env,
   event: DeliveredEvent,
@@ -142,7 +225,7 @@ async function deliverAuditWebhooks(
     } catch {
       return false;
     }
-    return evts.includes("*") || evts.includes(event.action);
+    return matchesEventPattern(evts, event.action);
   });
   if (!matching.length) return;
 
@@ -155,14 +238,21 @@ async function deliverAuditWebhooks(
       } catch {
         return;
       }
+      let outcome: DeliveryOutcome;
       try {
-        if (wh.kind === "discord") await deliverDiscord(env, config, event);
+        if (wh.kind === "discord")
+          outcome = await deliverDiscord(env, config, event);
         else if (wh.kind === "telegram")
-          await deliverTelegram(env, config, event);
-        else await deliverGeneral(env, config, event);
-      } catch {
-        // best-effort
+          outcome = await deliverTelegram(env, config, event);
+        else outcome = await deliverGeneral(env, config, event);
+      } catch (err) {
+        outcome = {
+          success: false,
+          status: null,
+          body: err instanceof Error ? err.message : String(err),
+        };
       }
+      await recordDelivery(env, wh.id, outcome);
     }),
   );
 }
@@ -206,9 +296,10 @@ async function deliverDiscord(
   env: Env,
   config: Record<string, unknown>,
   event: DeliveredEvent,
-): Promise<void> {
+): Promise<DeliveryOutcome> {
   const url = String(config.webhook_url ?? "");
-  if (validateOutboundUrl(url) !== null) return;
+  if (validateOutboundUrl(url) !== null)
+    return { success: false, status: null, body: "invalid webhook_url" };
   const fields = [
     { name: "Action", value: event.action, inline: true },
     event.actorName
@@ -220,6 +311,8 @@ async function deliverDiscord(
     event.ip ? { name: "IP", value: event.ip, inline: true } : null,
   ].filter(Boolean);
   const body = JSON.stringify({
+    username: "Prism",
+    avatar_url: DISCORD_AVATAR_URL,
     embeds: [
       {
         title: "Prism audit event",
@@ -230,12 +323,13 @@ async function deliverDiscord(
       },
     ],
   });
-  await loggedFetch(env, url, {
+  const res = await loggedFetch(env, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
     signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
   });
+  return summarizeResponse(res);
 }
 
 function escapeHtml(s: string): string {
@@ -246,11 +340,12 @@ async function deliverTelegram(
   env: Env,
   config: Record<string, unknown>,
   event: DeliveredEvent,
-): Promise<void> {
+): Promise<DeliveryOutcome> {
   const token = String(config.bot_token ?? "");
   const chatId = String(config.chat_id ?? "");
   const threadId = config.thread_id ? String(config.thread_id) : "";
-  if (!token || !chatId) return;
+  if (!token || !chatId)
+    return { success: false, status: null, body: "missing bot_token/chat_id" };
   const lines = [
     `<b>Prism audit event</b>`,
     `<b>Action:</b> ${escapeHtml(event.action)}`,
@@ -266,22 +361,28 @@ async function deliverTelegram(
     parse_mode: "HTML",
   };
   if (threadId) payload.message_thread_id = Number(threadId);
-  await loggedFetch(env, `https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-  });
+  const res = await loggedFetch(
+    env,
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+    },
+  );
+  return summarizeResponse(res);
 }
 
 async function deliverGeneral(
   env: Env,
   config: Record<string, unknown>,
   event: DeliveredEvent,
-): Promise<void> {
+): Promise<DeliveryOutcome> {
   const values = auditPlaceholders(event);
   const url = interpolate(String(config.url ?? ""), values);
-  if (validateOutboundUrl(url) !== null) return;
+  if (validateOutboundUrl(url) !== null)
+    return { success: false, status: null, body: "invalid url" };
   const method = String(config.method ?? "POST").toUpperCase();
   const headers: Record<string, string> = {};
   const rawHeaders = (config.headers ?? {}) as Record<string, unknown>;
@@ -296,5 +397,6 @@ async function deliverGeneral(
   if (method !== "GET" && method !== "HEAD" && config.body != null) {
     init.body = interpolate(String(config.body), values);
   }
-  await loggedFetch(env, url, init);
+  const res = await loggedFetch(env, url, init);
+  return summarizeResponse(res);
 }

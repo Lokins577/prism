@@ -2113,6 +2113,13 @@ export interface AuditQuery {
 
 export type AuditWebhookKind = "discord" | "telegram" | "general";
 
+export interface AuditWebhookDelivery {
+  at: number;
+  success: boolean;
+  status: number | null;
+  body: string;
+}
+
 export interface AuditWebhook {
   id: string;
   name: string;
@@ -2122,6 +2129,7 @@ export interface AuditWebhook {
   is_active: boolean;
   created_at: number;
   updated_at: number;
+  last_delivery?: AuditWebhookDelivery | null;
 }
 
 export interface AuditWebhookInput {
