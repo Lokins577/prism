@@ -135,7 +135,7 @@ interface DeliveredEvent extends AuditInput {
 
 // Avatar shown alongside Discord webhook messages.
 const DISCORD_AVATAR_URL =
-  "https://icons.siiway.org/glint/border/android-chrome-512x512.png";
+  "https://icons.siiway.org/prism/border/android-chrome-512x512.png";
 
 // How much of the response body to persist for the "last push" summary. The
 // UI truncates further based on the viewer's available width.
