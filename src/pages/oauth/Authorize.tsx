@@ -823,7 +823,8 @@ export function Authorize() {
                               setSiteError(null);
                             }}
                             placeholder="000000"
-                            maxLength={8}
+                            maxLength={6}
+                            inputMode="numeric"
                             autoComplete="one-time-code"
                             style={{
                               fontFamily: "monospace",

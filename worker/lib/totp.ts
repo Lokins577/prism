@@ -87,9 +87,8 @@ export async function verifyTotp(
   window = 1,
   timestampMs = Date.now(),
 ): Promise<boolean> {
-  // Authenticator apps display codes as "123 456"; tolerate pasted
-  // whitespace so the comparison sees only the digits.
   const normalized = token.replace(/\s+/g, "");
+  if (normalized.length !== 6 || !/^\d{6}$/.test(normalized)) return false;
   const secretBytes = base32ToBytes(secret);
   const counter = BigInt(Math.floor(timestampMs / 30_000));
   for (let i = -window; i <= window; i++) {
