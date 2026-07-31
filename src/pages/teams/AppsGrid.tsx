@@ -1,13 +1,6 @@
 // Apps card grid for TeamDetail
 
-import {
-  Card,
-  CardHeader,
-  Image,
-  Text,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
+import { Image, Text, makeStyles, tokens } from "@fluentui/react-components";
 import { EmptyState } from "../../components/EmptyState";
 import { SkeletonAppCards } from "../../components/Skeletons";
 import { GlobeRegular } from "@fluentui/react-icons";
@@ -19,13 +12,22 @@ const useStyles = makeStyles({
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-    gap: "16px",
+    gap: "12px",
     marginTop: "16px",
   },
   appCard: {
     cursor: "pointer",
-    transition: "box-shadow 0.15s",
-    ":hover": { boxShadow: tokens.shadow8 },
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: "10px",
+    padding: "16px",
+    background: tokens.colorNeutralBackground1,
+    transition: "border-color 0.15s",
+    ":hover": {
+      borderTopColor: tokens.colorNeutralForeground1,
+      borderRightColor: tokens.colorNeutralForeground1,
+      borderBottomColor: tokens.colorNeutralForeground1,
+      borderLeftColor: tokens.colorNeutralForeground1,
+    },
   },
 });
 
@@ -50,30 +52,38 @@ export function AppsGrid({ apps, loading }: AppsGridProps) {
   return (
     <div className={styles.grid}>
       {apps.map((app) => (
-        <Card
+        <div
           key={app.id}
           className={styles.appCard}
           onClick={() => navigate(`/apps/${app.id}`)}
         >
-          <CardHeader
-            image={
-              app.icon_url ? (
-                <Image
-                  src={app.icon_url}
-                  alt={app.name}
-                  shape="rounded"
-                  fit="cover"
-                  width={32}
-                  height={32}
-                />
-              ) : (
-                <GlobeRegular fontSize={32} />
-              )
-            }
-            header={<Text weight="semibold">{app.name}</Text>}
-            description={app.description || app.client_id}
-          />
-        </Card>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            {app.icon_url ? (
+              <Image
+                src={app.icon_url}
+                alt={app.name}
+                shape="rounded"
+                fit="cover"
+                width={32}
+                height={32}
+              />
+            ) : (
+              <GlobeRegular fontSize={32} />
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Text weight="semibold">{app.name}</Text>
+              <Text
+                size={200}
+                style={{
+                  color: tokens.colorNeutralForeground3,
+                  wordBreak: "break-all",
+                }}
+              >
+                {app.description || app.client_id}
+              </Text>
+            </div>
+          </div>
+        </div>
       ))}
     </div>
   );

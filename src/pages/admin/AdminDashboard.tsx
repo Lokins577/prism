@@ -1,12 +1,6 @@
 // Admin overview with stats
 
-import {
-  Card,
-  CardHeader,
-  Text,
-  Title3,
-  tokens,
-} from "@fluentui/react-components";
+import { Text, Title3, tokens } from "@fluentui/react-components";
 import {
   AppsRegular,
   GlobeRegular,
@@ -56,21 +50,35 @@ export function AdminDashboard() {
       style={{
         display: "grid",
         gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-        gap: 16,
+        gap: 12,
       }}
     >
       {STAT_CARDS.map(({ key, label, icon }) => (
-        <Card key={key}>
-          <CardHeader
-            image={
-              <div style={{ color: tokens.colorBrandForeground1 }}>{icon}</div>
-            }
-            header={<Text weight="semibold">{label}</Text>}
-          />
-          <div style={{ padding: "0 16px 16px" }}>
-            <Title3>{stats?.[key] ?? 0}</Title3>
+        <div
+          key={key}
+          style={{
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: 10,
+            padding: 16,
+            background: tokens.colorNeutralBackground1,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              color: tokens.colorBrandForeground1,
+            }}
+          >
+            {icon}
+            <Text weight="semibold">{label}</Text>
           </div>
-        </Card>
+          <Title3>{stats?.[key] ?? 0}</Title3>
+        </div>
       ))}
     </div>
   );

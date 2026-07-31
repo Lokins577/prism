@@ -46,7 +46,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: "8px",
     padding: "24px",
-    background: tokens.colorNeutralBackground2,
+    background: tokens.colorNeutralBackground1,
     // Let the table scroll sideways on narrow screens instead of
     // overflowing the page
     overflowX: "auto",

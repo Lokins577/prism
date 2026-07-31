@@ -44,22 +44,22 @@ import {
 } from "../components/Skeletons";
 
 const useStyles = makeStyles({
-  page: { display: "flex", flexDirection: "column", gap: "32px" },
+  page: { display: "flex", flexDirection: "column", gap: "20px" },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: "8px",
-    padding: "24px",
-    background: tokens.colorNeutralBackground2,
+    borderRadius: "10px",
+    padding: "18px",
+    background: tokens.colorNeutralBackground1,
     display: "flex",
     flexDirection: "column",
-    gap: "20px",
+    gap: "16px",
   },
   avatarRow: { display: "flex", alignItems: "center", gap: "20px" },
-  form: { display: "flex", flexDirection: "column", gap: "12px" },
+  form: { display: "flex", flexDirection: "column", gap: "10px" },
   row: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
-    gap: "12px",
+    gap: "10px",
     "@media (max-width: 600px)": {
       gridTemplateColumns: "1fr",
     },
@@ -69,10 +69,10 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    padding: "8px 12px",
+    padding: "6px 12px",
     borderRadius: "6px",
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    background: tokens.colorNeutralBackground3,
+    background: tokens.colorNeutralBackground1,
   },
   emailActions: {
     display: "flex",
@@ -356,7 +356,7 @@ export function Profile() {
 
   if (isLoading)
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <SkeletonProfileCard />
         <SkeletonEmailCard />
         <SkeletonFormCard rows={2} />

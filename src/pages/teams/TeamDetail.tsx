@@ -8,8 +8,6 @@ import {
   BreadcrumbDivider,
   BreadcrumbItem,
   Button,
-  Card,
-  CardHeader,
   Field,
   Input,
   Link,
@@ -112,20 +110,20 @@ const useStyles = makeStyles({
   },
   subTeamCard: {
     cursor: "pointer",
-    transition:
-      "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: "10px",
+    padding: "16px",
+    background: tokens.colorNeutralBackground1,
+    transition: "transform 120ms ease, border-color 120ms ease",
     ":hover": {
       transform: "translateY(-1px)",
-      borderTopColor: tokens.colorNeutralStroke1Hover,
-      borderRightColor: tokens.colorNeutralStroke1Hover,
-      borderBottomColor: tokens.colorNeutralStroke1Hover,
-      borderLeftColor: tokens.colorNeutralStroke1Hover,
-      boxShadow: tokens.shadow4,
+      borderTopColor: tokens.colorNeutralForeground1,
+      borderRightColor: tokens.colorNeutralForeground1,
+      borderBottomColor: tokens.colorNeutralForeground1,
+      borderLeftColor: tokens.colorNeutralForeground1,
     },
     ":active": {
       transform: "translateY(0)",
-      boxShadow: tokens.shadow2,
     },
   },
   subTeamCardHeader: {
@@ -634,7 +632,7 @@ export function TeamDetail() {
           {!subTeamsLoading && (subTeamsData?.sub_teams ?? []).length > 0 && (
             <div className={styles.subTeamsGrid}>
               {(subTeamsData?.sub_teams ?? []).map((sub) => (
-                <Card
+                <div
                   key={sub.id}
                   className={styles.subTeamCard}
                   onClick={() => navigate(`/teams/${sub.id}`)}
@@ -647,20 +645,24 @@ export function TeamDetail() {
                     }
                   }}
                 >
-                  <CardHeader
-                    image={
-                      sub.avatar_url ? (
-                        <Avatar
-                          image={{ src: sub.avatar_url }}
-                          name={sub.name}
-                          size={36}
-                          shape="square"
-                        />
-                      ) : (
-                        <Avatar name={sub.name} size={36} shape="square" />
-                      )
-                    }
-                    header={
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 12,
+                    }}
+                  >
+                    {sub.avatar_url ? (
+                      <Avatar
+                        image={{ src: sub.avatar_url }}
+                        name={sub.name}
+                        size={36}
+                        shape="square"
+                      />
+                    ) : (
+                      <Avatar name={sub.name} size={36} shape="square" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div className={styles.subTeamCardHeader}>
                         <Text weight="semibold" className={styles.subTeamName}>
                           {sub.name}
@@ -673,8 +675,6 @@ export function TeamDetail() {
                           {sub.my_role}
                         </Badge>
                       </div>
-                    }
-                    description={
                       <Text
                         size={200}
                         style={{ color: tokens.colorNeutralForeground3 }}
@@ -683,9 +683,9 @@ export function TeamDetail() {
                           count: sub.member_count,
                         })}
                       </Text>
-                    }
-                  />
-                </Card>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           )}

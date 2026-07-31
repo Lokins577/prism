@@ -3,8 +3,6 @@
 import {
   Badge,
   Button,
-  Card,
-  CardHeader,
   Dialog,
   DialogActions,
   DialogBody,
@@ -36,17 +34,26 @@ const useStyles = makeStyles({
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-    gap: "16px",
+    gap: "12px",
   },
   appCard: {
     cursor: "pointer",
-    transition: "box-shadow 0.15s",
-    ":hover": { boxShadow: tokens.shadow8 },
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: "10px",
+    padding: "16px",
+    background: tokens.colorNeutralBackground1,
+    transition: "border-color 0.15s",
+    ":hover": {
+      borderTopColor: tokens.colorNeutralForeground1,
+      borderRightColor: tokens.colorNeutralForeground1,
+      borderBottomColor: tokens.colorNeutralForeground1,
+      borderLeftColor: tokens.colorNeutralForeground1,
+    },
   },
   form: {
     display: "flex",
     flexDirection: "column",
-    gap: "12px",
+    gap: "10px",
   },
 });
 
@@ -196,27 +203,40 @@ export function AppList() {
 
       <div className={styles.grid}>
         {data?.apps.map((app) => (
-          <Card
+          <div
             key={app.id}
             className={styles.appCard}
             onClick={() => navigate(`/apps/${app.id}`)}
           >
-            <CardHeader
-              image={
-                app.icon_url ? (
-                  <Image
-                    src={app.icon_url}
-                    alt={app.name}
-                    shape="rounded"
-                    fit="cover"
-                    width={32}
-                    height={32}
-                  />
-                ) : (
-                  <GlobeRegular fontSize={32} />
-                )
-              }
-              header={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+                marginBottom: 8,
+              }}
+            >
+              {app.icon_url ? (
+                <Image
+                  src={app.icon_url}
+                  alt={app.name}
+                  shape="rounded"
+                  fit="cover"
+                  width={32}
+                  height={32}
+                />
+              ) : (
+                <GlobeRegular fontSize={32} />
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  minWidth: 0,
+                  flex: 1,
+                }}
+              >
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <Text weight="semibold">{app.name}</Text>
                   {app.is_verified && (
@@ -230,10 +250,18 @@ export function AppList() {
                     </Badge>
                   )}
                 </div>
-              }
-              description={app.description || app.website_url || app.client_id}
-            />
-          </Card>
+                {(app.description || app.website_url || app.client_id) && (
+                  <Text
+                    size={200}
+                    style={{ color: tokens.colorNeutralForeground3 }}
+                    truncate
+                  >
+                    {app.description || app.website_url || app.client_id}
+                  </Text>
+                )}
+              </div>
+            </div>
+          </div>
         ))}
       </div>
     </div>

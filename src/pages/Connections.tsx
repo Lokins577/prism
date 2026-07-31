@@ -37,13 +37,13 @@ const useStyles = makeStyles({
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-    gap: "16px",
+    gap: "12px",
   },
   providerCard: {
     padding: "20px",
     borderRadius: "8px",
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    background: tokens.colorNeutralBackground2,
+    background: tokens.colorNeutralBackground1,
     display: "flex",
     flexDirection: "column",
     gap: "12px",

@@ -47,7 +47,7 @@ const useStyles = makeStyles({
   card: {
     borderRadius: "8px",
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    background: tokens.colorNeutralBackground2,
+    background: tokens.colorNeutralBackground1,
     overflow: "hidden",
   },
   cardHeader: {

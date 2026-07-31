@@ -23,15 +23,7 @@ const useStyles = makeStyles({
     gap: "20px",
     padding: "32px 16px",
     boxSizing: "border-box",
-    // Microsoft-sign-in-style canvas: a calm neutral base with two very
-    // soft brand-tinted blooms drifting in from opposite corners.
-    // color-mix keeps them tied to the configurable accent color and they
-    // read correctly in both color schemes.
-    backgroundImage: [
-      `radial-gradient(38rem 38rem at 14% 16%, color-mix(in srgb, ${tokens.colorBrandBackground} 8%, transparent), transparent 62%)`,
-      `radial-gradient(46rem 46rem at 86% 86%, color-mix(in srgb, ${tokens.colorBrandBackground} 6%, transparent), transparent 62%)`,
-    ].join(", "),
-    backgroundColor: tokens.colorNeutralBackground2,
+    background: tokens.colorNeutralBackground1,
   },
   brand: {
     display: "flex",
@@ -39,15 +31,12 @@ const useStyles = makeStyles({
     justifyContent: "center",
   },
   card: {
-    "--auth-card-pad": "40px",
+    "--auth-card-pad": "32px",
     width: "100%",
     padding: "var(--auth-card-pad)",
-    borderRadius: "12px",
-    // Hairline only — the shadow does the lifting, like the MS sign-in
-    // card; stroke3 keeps a whisper of definition in dark mode.
-    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderRadius: "14px",
+    border: `2px solid ${tokens.colorNeutralStroke1}`,
     background: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow16,
     display: "flex",
     flexDirection: "column",
     boxSizing: "border-box",
@@ -90,7 +79,7 @@ export function AuthShell({
   });
 
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page} auth-grid`}>
       {!hideBrand && site?.site_icon_url && (
         <div className={styles.brand}>
           <Image

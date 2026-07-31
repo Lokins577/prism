@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useThemeStore } from "../store/theme";
+import { patchTheme } from "../theme";
 
 interface ThemeProviderProps {
   children: ReactNode;
@@ -156,9 +157,13 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     const accent = siteConfig?.accent_color ?? "#0078d4";
     try {
       const brand = buildBrandVariants(accent);
-      return resolvedDark ? createDarkTheme(brand) : createLightTheme(brand);
+      const base = resolvedDark
+        ? createDarkTheme(brand)
+        : createLightTheme(brand);
+      return patchTheme(base, resolvedDark);
     } catch {
-      return resolvedDark ? webDarkTheme : webLightTheme;
+      const fallback = resolvedDark ? webDarkTheme : webLightTheme;
+      return patchTheme(fallback, resolvedDark);
     }
   }, [siteConfig?.accent_color, resolvedDark]);
 

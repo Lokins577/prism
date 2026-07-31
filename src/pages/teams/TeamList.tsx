@@ -4,8 +4,6 @@ import {
   Avatar,
   Badge,
   Button,
-  Card,
-  CardHeader,
   Dialog,
   DialogActions,
   DialogBody,
@@ -36,12 +34,21 @@ const useStyles = makeStyles({
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-    gap: "16px",
+    gap: "12px",
   },
   card: {
     cursor: "pointer",
-    transition: "box-shadow 0.15s",
-    ":hover": { boxShadow: tokens.shadow8 },
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: "10px",
+    padding: "16px",
+    background: tokens.colorNeutralBackground1,
+    transition: "border-color 0.15s",
+    ":hover": {
+      borderTopColor: tokens.colorNeutralForeground1,
+      borderRightColor: tokens.colorNeutralForeground1,
+      borderBottomColor: tokens.colorNeutralForeground1,
+      borderLeftColor: tokens.colorNeutralForeground1,
+    },
   },
   form: {
     display: "flex",
@@ -188,24 +195,22 @@ export function TeamList() {
 
       <div className={styles.grid}>
         {data?.teams.map((team) => (
-          <Card
+          <div
             key={team.id}
             className={styles.card}
             onClick={() => navigate(`/teams/${team.id}`)}
           >
-            <CardHeader
-              image={
-                team.avatar_url ? (
-                  <Avatar
-                    image={{ src: team.avatar_url }}
-                    name={team.name}
-                    size={32}
-                  />
-                ) : (
-                  <Avatar name={team.name} size={32} />
-                )
-              }
-              header={
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              {team.avatar_url ? (
+                <Avatar
+                  image={{ src: team.avatar_url }}
+                  name={team.name}
+                  size={32}
+                />
+              ) : (
+                <Avatar name={team.name} size={32} />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <Text weight="semibold">{team.name}</Text>
                   <Badge
@@ -216,10 +221,17 @@ export function TeamList() {
                     {team.role}
                   </Badge>
                 </div>
-              }
-              description={team.description || undefined}
-            />
-          </Card>
+                {team.description && (
+                  <Text
+                    size={200}
+                    style={{ color: tokens.colorNeutralForeground3 }}
+                  >
+                    {team.description}
+                  </Text>
+                )}
+              </div>
+            </div>
+          </div>
         ))}
       </div>
     </div>

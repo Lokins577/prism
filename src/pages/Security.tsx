@@ -76,15 +76,15 @@ function describeDevice(userAgent: string | null): string | null {
 }
 
 const useStyles = makeStyles({
-  page: { display: "flex", flexDirection: "column", gap: "32px" },
+  page: { display: "flex", flexDirection: "column", gap: "20px" },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: "8px",
-    padding: "24px",
-    background: tokens.colorNeutralBackground2,
+    borderRadius: "10px",
+    padding: "18px",
+    background: tokens.colorNeutralBackground1,
     display: "flex",
     flexDirection: "column",
-    gap: "16px",
+    gap: "14px",
   },
   cardHeader: {
     display: "flex",
@@ -92,8 +92,6 @@ const useStyles = makeStyles({
     justifyContent: "space-between",
   },
   actions: { display: "flex", gap: "8px" },
-  // Let the table scroll sideways on narrow screens instead of
-  // overflowing the page
   tableScroll: { overflowX: "auto" },
   qrSection: {
     display: "flex",
@@ -107,7 +105,7 @@ const useStyles = makeStyles({
     gap: "8px",
     padding: "12px",
     background: tokens.colorNeutralBackground3,
-    borderRadius: "4px",
+    borderRadius: "6px",
     fontFamily: "monospace",
     "@media (max-width: 600px)": {
       gridTemplateColumns: "1fr",

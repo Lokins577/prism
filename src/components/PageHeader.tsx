@@ -12,7 +12,7 @@ const useStyles = makeStyles({
     justifyContent: "space-between",
     flexWrap: "wrap",
     gap: "12px",
-    marginBottom: "24px",
+    marginBottom: "16px",
   },
   titles: {
     display: "flex",
