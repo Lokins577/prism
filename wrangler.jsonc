@@ -69,6 +69,12 @@
   // Environment variables (non-secret)
   "vars": {
     "APP_URL": "https://prism.siiway.org",
+    // Comma / semicolon / whitespace separated list of usernames
+    // that cannot be deleted. Leave empty to disable.
+    "LOCKDOWN_USERS": "",
+    // Comma / semicolon / whitespace separated list of team names
+    // that cannot be deleted. Leave empty to disable.
+    "LOCKDOWN_TEAMS": "",
   },
   "routes": [
     {

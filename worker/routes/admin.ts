@@ -51,6 +51,7 @@ import type {
   UserRow,
   Variables,
 } from "../types";
+import { isUserLocked, isTeamLocked } from "../lib/lockdown";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
 const app = new Hono<AppEnv>();
@@ -997,10 +998,16 @@ app.delete("/users/:id", async (c) => {
   const id = c.req.param("id");
   if (id === admin.id) return c.json({ error: "Cannot delete yourself" }, 400);
 
-  const user = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?")
+  const user = await c.env.DB.prepare(
+    "SELECT id, username FROM users WHERE id = ?",
+  )
     .bind(id)
-    .first();
+    .first<{ id: string; username: string }>();
   if (!user) return c.json({ error: "User not found" }, 404);
+
+  if (isUserLocked(c.env, user.username)) {
+    return c.json({ error: "This user is locked and cannot be deleted" }, 403);
+  }
 
   await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
   // A deleted user typically takes their avatar plus every README image
@@ -1840,10 +1847,14 @@ app.delete("/teams/:id", async (c) => {
   const admin = c.get("user");
   const id = c.req.param("id");
 
-  const team = await c.env.DB.prepare("SELECT id FROM teams WHERE id = ?")
+  const team = await c.env.DB.prepare("SELECT id, name FROM teams WHERE id = ?")
     .bind(id)
-    .first();
+    .first<{ id: string; name: string }>();
   if (!team) return c.json({ error: "Team not found" }, 404);
+
+  if (isTeamLocked(c.env, team.name)) {
+    return c.json({ error: "This team is locked and cannot be deleted" }, 403);
+  }
 
   await dissolveTeam(c.env.DB, id, admin.id);
 

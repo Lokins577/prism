@@ -35,6 +35,7 @@ import {
   unmetRequirements,
 } from "../lib/teamRequirements";
 import { recordAudit, auditRequestMeta } from "../lib/audit";
+import { isTeamLocked } from "../lib/lockdown";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
 const app = new Hono<AppEnv>();
@@ -1148,6 +1149,13 @@ app.delete("/:id", async (c) => {
   if (!eff) return c.json({ error: "Not found" }, 404);
   if (!hasRole(eff.role, "owner"))
     return c.json({ error: "Only the team owner can delete the team" }, 403);
+
+  const teamRow = await c.env.DB.prepare("SELECT name FROM teams WHERE id = ?")
+    .bind(id)
+    .first<{ name: string }>();
+  if (teamRow && isTeamLocked(c.env, teamRow.name)) {
+    return c.json({ error: "This team is locked and cannot be deleted" }, 403);
+  }
 
   auditTeam(c, id, "team.delete");
 

@@ -24,6 +24,12 @@ interface Env {
   // requesting a reset and being allowed to confirm it. 2FA is still
   // required even when this is set.
   NO_RESET_COOLDOWN?: string;
+  // Comma / semicolon / whitespace separated list of usernames
+  // that cannot be deleted.
+  LOCKDOWN_USERS?: string;
+  // Comma / semicolon / whitespace separated list of team names
+  // that cannot be deleted.
+  LOCKDOWN_TEAMS?: string;
   // Cloudflare Secrets Store binding for the master encryption key used to
   // wrap OAuth client secrets, OAuth source credentials, and other
   // sensitive site_config fields at rest in D1. Optional — when unset the
