@@ -190,7 +190,8 @@ migration and is idempotent — re-running is safe.
 - **Migrate recovery codes** — re-hashes legacy plaintext backup codes.
 - **Site reset** — wipe and reinitialize. The destination admin signs an email
   acknowledgement first; a typo confirmation in the UI then triggers the wipe.
-  This is destructive and requires a configured email provider.
+  This is destructive and requires a configured email provider. The button is
+  hidden unless `ENABLE_RESET = "true"` is set in `wrangler.jsonc`.
 
 ## OAuth Sources
 
@@ -205,6 +206,7 @@ migration and is idempotent — re-running is safe.
 | Display name  | Label shown on login/register buttons                                                            |
 | Client ID     | OAuth application client ID                                                                      |
 | Client Secret | OAuth application client secret                                                                  |
+| Trusted       | When `true` (default), social login through this source skips email verification                 |
 | Enabled       | Toggle to show/hide the source on login without deleting it                                      |
 
 ### Generic OIDC sources
@@ -260,6 +262,10 @@ The user table is searchable and sortable. Click a user row to open the detail v
 Deleting a user is irreversible. Their OAuth apps are also deleted, which will
 break any third-party integrations that used those apps.
 
+If a username is listed in the `LOCKDOWN_USERS` env var in `wrangler.jsonc`,
+the delete button is hidden and the API returns a 403 — that user is permanently
+protected from deletion. See [Configuration → Wrangler bindings & variables](configuration.md#wrangler-bindings--variables).
+
 ## Applications
 
 The app table lists all OAuth apps across all users, including:
@@ -287,6 +293,9 @@ count, and join-requirement flags.
 | ------- | ----------------------------------------------------------------------------------------------- |
 | Inspect | View members, owned apps, and verified domains for the team                                     |
 | Disband | Remove the team. Team-owned apps are reassigned to the team's owner so they survive the cascade |
+
+If a team name is listed in the `LOCKDOWN_TEAMS` env var, the disband button is
+hidden and the API returns a 403. See [Configuration → Wrangler bindings & variables](configuration.md#wrangler-bindings--variables).
 
 `disable_user_create_team` hides the "New team" button from non-admins. With it
 on, only admins can create teams (existing teams keep working).

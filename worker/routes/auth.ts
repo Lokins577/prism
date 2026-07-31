@@ -328,31 +328,31 @@ app.post("/login", async (c) => {
   // Login is a two-step flow when 2FA is enrolled: the first call (no
   // totp_code) validates password+captcha and returns totp_required; the
   // second call replays password and adds totp_code. Captcha tokens are
-  // single-use (provider replay protection / PoW nonce) so we only verify
-  // on the password step. The TOTP follow-up still re-checks the password,
-  // and /login itself is IP rate-limited, so we don't lose anti-bot value.
-  if (!body.totp_code) {
-    const captchaOk = await verifyCaptchaToken(
-      c.env.DB,
-      body.captcha_token,
-      body.pow_challenge,
-      body.pow_nonce,
-      ip,
-      c.env,
+  // single-use (provider replay protection / PoW nonce), but we verify on
+  // every call — including the TOTP follow-up — because skipping captcha on
+  // step 2 would let an attacker probe passwords without solving captcha and
+  // would leak whether the password was correct via the TOTP error message.
+  // The client must submit a fresh captcha token on each step.
+  const captchaOk = await verifyCaptchaToken(
+    c.env.DB,
+    body.captcha_token,
+    body.pow_challenge,
+    body.pow_nonce,
+    ip,
+    c.env,
+  );
+  if (!captchaOk.success) {
+    c.executionCtx.waitUntil(
+      logLoginError(
+        c.env.DB,
+        "captcha_failed",
+        body.identifier ?? null,
+        ip,
+        ua,
+        {},
+      ).catch(() => {}),
     );
-    if (!captchaOk.success) {
-      c.executionCtx.waitUntil(
-        logLoginError(
-          c.env.DB,
-          "captcha_failed",
-          body.identifier ?? null,
-          ip,
-          ua,
-          {},
-        ).catch(() => {}),
-      );
-      return c.json({ error: captchaOk.error ?? "Captcha failed" }, 400);
-    }
+    return c.json({ error: captchaOk.error ?? "Captcha failed" }, 400);
   }
 
   const isEmail = body.identifier.includes("@");
@@ -463,7 +463,7 @@ app.post("/login", async (c) => {
           { user_id: user.id },
         ).catch(() => {}),
       );
-      return c.json({ error: "Invalid TOTP code" }, 401);
+      return c.json({ error: "Invalid credentials" }, 401);
     }
   }
 

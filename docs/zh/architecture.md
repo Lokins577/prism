@@ -53,7 +53,7 @@ worker/
 ├── types.ts                # D1 行类型、Variables、SiteConfig
 │
 ├── db/migrations/
-│   └── 0001_init.sql … 0046_oauth_source_icon.sql
+│   └── 0001_init.sql … 0053_audit_webhook_delivery.sql
 │
 ├── lib/
 │   ├── config.ts           # getConfig()、setConfigValues()、JWT 密钥、RSA 密钥对（KV）
@@ -81,6 +81,7 @@ worker/
 │   ├── scopes.ts           # scope ↔ claim 映射 + 跨应用 scope 解析
 │   ├── redirectUri.ts      # OAuth redirect URI 校验，已注册域名检查
 │   ├── cookies.ts          # Session cookie 工具
+│   ├── lockdown.ts         # 用户/团队删除锁定（基于环境变量）
 │   └── logger.ts           # 请求日志中间件
 │
 ├── middleware/
@@ -165,7 +166,7 @@ WebAuthn 凭据。`credential_id` 用 base64url。每次成功认证后更新 `c
 
 ### `oauth_sources`
 
-**Admin → OAuth Sources** 中配置的 OAuth 提供方：内置（GitHub、Google、Microsoft、Discord、Telegram、X）以及 Generic OIDC、Generic OAuth 2。每个源拥有自己的 slug、启用状态，OIDC/OAuth2 还含 issuer / auth / token / userinfo URL。同一类型可以有多个源。`client_secret` 加密存储。
+**Admin → OAuth Sources** 中配置的 OAuth 提供方：内置（GitHub、Google、Microsoft、Discord、Telegram、X）以及 Generic OIDC、Generic OAuth 2。每个源拥有自己的 slug、启用状态，OIDC/OAuth2 还含 issuer / auth / token / userinfo URL。同一类型可以有多个源。`client_secret` 加密存储。`trusted` 标志（默认 `1`）标记一个来源的邮箱在注册时是否自动视为已验证；不受信任的来源（`trusted = 0`）在注册后始终要求邮箱验证。
 
 ### `domains`
 

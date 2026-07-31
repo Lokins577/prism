@@ -250,6 +250,14 @@ export function Authorize() {
       window.location.href = res.redirect;
     } catch (err) {
       if (err instanceof ApiError) {
+        // Session expired / invalid during the POST — redirect to login
+        // so the user can re-authenticate and return to the consent screen.
+        if (err.status === 401 || err.message === "Unauthorized") {
+          const loginUrl = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          navigate(loginUrl, { replace: true });
+          return;
+        }
+
         const errorCode = err.message; // ApiError.message = the "error" field from JSON
         const humanMsg =
           typeof err.data === "object" &&
@@ -340,12 +348,25 @@ export function Authorize() {
 
   // If not logged in, redirect to login (client-side safety net; the route
   // loader handles the SSR redirect). Guarded against window-less SSR.
+  // Also catches the case where the SSR-seeded session is stale: the
+  // /app-info API returns user:null when the cookie/JWT has expired while the
+  // Zustand store still carries the old token (seeded from SSR).
   useEffect(() => {
     if (!user || !token) {
       const loginUrl = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
       navigate(loginUrl, { replace: true });
     }
   }, [user, token, navigate]);
+
+  // API-level session check: even when the Zustand store still has a token
+  // (SSR-seeded), the /app-info endpoint may return user:null if the cookie
+  // expired or was revoked while the page was sitting open. Redirect to login.
+  useEffect(() => {
+    if (data && !data.user) {
+      const loginUrl = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      navigate(loginUrl, { replace: true });
+    }
+  }, [data, navigate]);
 
   // While waiting for the auth-redirect effect to fire, show a spinner.
   // The route loader handles the SSR redirect (302), so this only runs on

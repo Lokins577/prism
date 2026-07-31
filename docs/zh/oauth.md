@@ -294,7 +294,7 @@ token=<ACCESS_OR_REFRESH_TOKEN>
 
 ## ID 令牌
 
-ID 令牌是一个签名的 JWT（RS256）。可通过 `/.well-known/jwks.json` 发布的公钥进行验证，或使用内省端点进行服务端验证。
+ID 令牌是一个签名的 JWT。默认算法为 **ML-DSA-65**（后量子，FIPS 204）；`/.well-known/jwks.json` 同时发布 **RS256** 公钥以兼容旧客户端。可通过 JWKS 端点发布的公钥进行验证，或使用内省端点进行服务端验证。
 
 标准声明（请求 `openid` 权限范围时始终包含）：
 

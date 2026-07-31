@@ -109,8 +109,7 @@ the existing `share-to-team` flow still works for explicit copies.
 
 ### Configurability
 
-All sub-team behavior is driven by site config (admin → **Settings → Teams
-& App Limits**). Each value is also surfaced on the unauthenticated
+All sub-team behavior is driven by site config (admin → **Settings → Sub-teams**). Each value is also surfaced on the unauthenticated
 `/api/site` payload so SDK clients can mirror the gates in their UIs.
 
 | Key                                   | Type | Default | Effect                                                                                                       |

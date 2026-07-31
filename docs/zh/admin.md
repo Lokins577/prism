@@ -131,7 +131,7 @@ description: 在 Prism 管理面板中管理用户、应用、OAuth 来源、设
 - **迁移团队为 team-as-user 行** — 为每个团队补建一个 `kind = 'team'` 的合成 `users` 行，使 `oauth_apps.owner_id` 能统一连接。
 - **迁移图片代理映射** — 为关闭式图片代理上线之前已经存在的头像 / 图标 URL 注册映射。
 - **迁移恢复码** — 重新哈希历史明文备用码。
-- **站点重置** — 清空并重新初始化。目标管理员需先签署一封邮件确认；管理面板再要求输入确认词触发清空。具有破坏性，且需要已配置邮件提供商。
+- **站点重置** — 清空并重新初始化。目标管理员需先签署一封邮件确认；管理面板再要求输入确认词触发清空。具有破坏性，且需要已配置邮件提供商。该按钮仅在 `wrangler.jsonc` 中设置 `ENABLE_RESET = "true"` 时显示。
 
 ## OAuth 来源
 
@@ -146,6 +146,7 @@ description: 在 Prism 管理面板中管理用户、应用、OAuth 来源、设
 | 显示名称      | 显示在登录/注册按钮上的标签                                                                 |
 | Client ID     | OAuth 应用的客户端 ID                                                                       |
 | Client Secret | OAuth 应用的客户端密钥                                                                      |
+| 受信任        | 为 `true`（默认）时，通过该来源的社交登录跳过邮箱验证                                       |
 | 启用          | 切换是否在登录页面显示该来源，禁用不会删除数据                                              |
 
 ### 通用 OIDC 来源
@@ -200,6 +201,8 @@ https://<your-prism-domain>/api/connections/<slug>/callback
 
 删除用户不可逆。其 OAuth 应用也会一并删除，这将导致使用这些应用的所有第三方集成失效。
 
+如果用户名在 `wrangler.jsonc` 的 `LOCKDOWN_USERS` 环境变量中列出，删除按钮将被隐藏且 API 返回 403 — 该用户永久受保护。详见 [配置 → Wrangler 绑定与变量](configuration.md#wrangler-绑定与变量)。
+
 ## 应用
 
 应用列表显示所有用户的全部 OAuth 应用，包括：
@@ -225,6 +228,8 @@ https://<your-prism-domain>/api/connections/<slug>/callback
 | ---- | ------------------------------------------------------------------ |
 | 查看 | 浏览成员、所属应用、已验证域名                                     |
 | 解散 | 删除团队。团队拥有的应用会先被重新分配给团队所有者，避免被级联删除 |
+
+如果团队名称在 `LOCKDOWN_TEAMS` 环境变量中列出，解散按钮将被隐藏且 API 返回 403。详见 [配置 → Wrangler 绑定与变量](configuration.md#wrangler-绑定与变量)。
 
 `disable_user_create_team` 会对非管理员隐藏「新建团队」按钮 — 启用后只有管理员能创建团队（已存在的团队继续工作）。
 

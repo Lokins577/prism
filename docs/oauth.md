@@ -336,7 +336,7 @@ token=<ACCESS_OR_REFRESH_TOKEN>
 
 ## ID token
 
-The ID token is a signed JWT (RS256). Verify it using the public key published at `/.well-known/jwks.json`, or use the introspection endpoint for server-side validation without parsing JWTs.
+The ID token is a signed JWT. The default algorithm is **ML-DSA-65** (post-quantum, FIPS 204); **RS256** is also published at `/.well-known/jwks.json` for legacy clients. Verify it using the public key from the JWKS endpoint, or use the introspection endpoint for server-side validation without parsing JWTs.
 
 Standard claims (always present when `openid` scope is requested):
 

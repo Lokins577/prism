@@ -9,7 +9,7 @@ Site configuration is stored in the `site_config` D1 table and editable at runti
 through **Admin → Settings**. No redeployment is needed to change any of these values.
 
 Sensitive keys (captcha secret, social client secrets, SMTP/IMAP passwords, the
-GitHub README PAT) are encrypted at rest with AES-GCM via the
+GitHub README PAT, Discord bot token) are encrypted at rest with AES-GCM via the
 [`SECRETS_KEY`](#wrangler-bindings--variables) Cloudflare Secrets Store binding.
 The admin panel transparently decrypts on read; values are never exposed via the
 config API.
@@ -231,9 +231,13 @@ These are configured in `wrangler.jsonc` and not editable from the admin panel.
 
 ### Variables
 
-| Variable  | Required | Description                                                    |
-| --------- | -------- | -------------------------------------------------------------- |
-| `APP_URL` | Yes      | Full origin of the deployment, e.g. `https://auth.example.com` |
+| Variable            | Required | Description                                                                                                                                             |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_URL`           | Yes      | Full origin of the deployment, e.g. `https://auth.example.com`                                                                                          |
+| `LOCKDOWN_USERS`    | No       | Comma / semicolon / whitespace separated list of usernames that cannot be deleted by anyone (including admins). Leave empty to disable.                 |
+| `LOCKDOWN_TEAMS`    | No       | Comma / semicolon / whitespace separated list of team names that cannot be deleted by anyone (including admins). Leave empty to disable.                |
+| `ENABLE_RESET`      | No       | Set to `"true"` to enable the **Admin → Settings → Danger Zone → Site reset** button. When unset or anything else the button is hidden (destructive).   |
+| `NO_RESET_COOLDOWN` | No       | Set to `"true"` to skip the 30-minute cooldown between requesting a reset and being allowed to confirm it. 2FA is still required even when this is set. |
 
 ### Bindings
 
@@ -279,3 +283,14 @@ Every 6 hours the worker:
 - polls the IMAP mailbox (when `email_receive_provider = imap`),
 - purges the `app_event_queue` and expired `pow_used` rows,
 - sweeps orphaned `image_proxy_mappings` (mappings whose source row no longer exists).
+
+### User / team deletion lockdown
+
+When you have users or teams that must never be deleted — shared service
+accounts, bot identities, or critical organisational teams — set
+`LOCKDOWN_USERS` and `LOCKDOWN_TEAMS` in `wrangler.jsonc`. Locked accounts
+return a 403 error when any admin (or team owner) attempts to delete them
+through the API.
+
+The variables accept a comma, semicolon, or whitespace separated list of names.
+Leading and trailing whitespace on each name is stripped.

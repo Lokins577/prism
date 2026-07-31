@@ -113,6 +113,18 @@ Update `wrangler.jsonc` so the Worker knows its public origin:
 For local dev, leave it as the default — the dev server uses
 `http://localhost:5173`.
 
+The `vars` block also contains three optional zero-config knobs:
+
+- `LOCKDOWN_USERS` / `LOCKDOWN_TEAMS` — comma-separated lists of
+  usernames / team names that are permanently protected from deletion
+  (the API returns 403). Leave empty to disable.
+- `ENABLE_RESET` — set to `"true"` to surface the **Site reset** button
+  in the admin Danger Zone. Off by default to prevent accidental wipes.
+  `NO_RESET_COOLDOWN` skips the 30-minute wait before confirming the reset.
+
+See [Configuration](configuration.md#wrangler-bindings--variables) for the
+full set of Wrangler vars and bindings.
+
 ## 5. Start development server
 
 ```bash

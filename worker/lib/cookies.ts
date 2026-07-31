@@ -7,7 +7,7 @@
 
 import type { Context } from "hono";
 
-export const SESSION_COOKIE = "prism_session";
+export const SESSION_COOKIE = "__Host-prism_session";
 
 export function setSessionCookie(
   c: Context,

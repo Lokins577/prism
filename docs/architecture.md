@@ -64,7 +64,7 @@ worker/
 ├── types.ts                # D1 row types, Variables, SiteConfig
 │
 ├── db/migrations/
-│   └── 0001_init.sql … 0046_oauth_source_icon.sql
+│   └── 0001_init.sql … 0053_audit_webhook_delivery.sql
 │
 ├── lib/
 │   ├── config.ts           # getConfig(), setConfigValues(), JWT secret, RSA keypair (KV)
@@ -92,6 +92,7 @@ worker/
 │   ├── scopes.ts           # Scope ↔ claim mapping + cross-app scope parsing
 │   ├── redirectUri.ts      # OAuth redirect URI validation, registered-domain check
 │   ├── cookies.ts          # Session cookie helpers
+│   ├── lockdown.ts         # User / team deletion lockdown (env-var driven)
 │   └── logger.ts           # Request logger middleware
 │
 ├── middleware/
@@ -219,7 +220,10 @@ OAuth providers configured in **Admin → OAuth Sources**: built-in (GitHub,
 Google, Microsoft, Discord, Telegram, X) plus Generic OIDC and Generic OAuth 2.
 Each source has its own slug, enabled flag, and (for OIDC/OAuth2) issuer / auth
 / token / userinfo URLs. The same provider type can have multiple sources.
-`client_secret` is encrypted at rest.
+`client_secret` is encrypted at rest. The `trusted` flag (default `1`) marks a
+source whose email is accepted as verified without an explicit email-verification
+step; untrusted sources (`trusted = 0`) always require email verification after
+sign-up.
 
 ### `domains`
 

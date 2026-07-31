@@ -71,6 +71,7 @@ app.get("/config", async (c) => {
     microsoft_client_secret: "***",
     discord_client_secret: "***",
     discord_bot_token: config.discord_bot_token ? "***" : "",
+    github_readme_token: config.github_readme_token ? "***" : "",
     email_api_key: "***",
     smtp_password: "***",
     imap_password: "***",

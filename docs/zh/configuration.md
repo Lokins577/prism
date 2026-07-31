@@ -7,7 +7,7 @@ description: 所有存储在 D1 中的运行时配置项，以及 Wrangler 绑�
 
 站点配置存储在 D1 的 `site_config` 表中，可通过 **Admin → Settings** 在运行时编辑。更改任何配置项均无需重新部署。
 
-敏感字段（验证码私钥、社交登录的 client_secret、SMTP/IMAP 密码、GitHub README PAT 等）通过 Cloudflare Secrets Store 绑定 [`SECRETS_KEY`](#wrangler-绑定与变量) 使用 AES-GCM 在数据库中加密存储。管理面板读取时透明解密，配置 API 永远不会暴露其明文。
+敏感字段（验证码私钥、社交登录的 client_secret、SMTP/IMAP 密码、GitHub README PAT、Discord bot token 等）通过 Cloudflare Secrets Store 绑定 [`SECRETS_KEY`](#wrangler-绑定与变量) 使用 AES-GCM 在数据库中加密存储。管理面板读取时透明解密，配置 API 永远不会暴露其明文。
 
 ## 通用
 
@@ -207,9 +207,13 @@ https://your-domain/api/connections/<slug>/callback
 
 ### 变量
 
-| 变量      | 必填 | 说明                                               |
-| --------- | ---- | -------------------------------------------------- |
-| `APP_URL` | 是   | 部署的完整 origin，例如 `https://auth.example.com` |
+| 变量                | 必填 | 说明                                                                                                              |
+| ------------------- | ---- | ----------------------------------------------------------------------------------------------------------------- |
+| `APP_URL`           | 是   | 部署的完整 origin，例如 `https://auth.example.com`                                                                |
+| `LOCKDOWN_USERS`    | 否   | 逗号/分号/空格分隔的用户名列表，列表中的用户无法被任何人（包括管理员）删除。留空即禁用。                          |
+| `LOCKDOWN_TEAMS`    | 否   | 逗号/分号/空格分隔的团队名称列表，列表中的团队无法被任何人（包括管理员）删除。留空即禁用。                        |
+| `ENABLE_RESET`      | 否   | 设为 `"true"` 以启用 **Admin → Settings → Danger Zone → Site reset** 按钮。未设置或为其他值时隐藏（具有破坏性）。 |
+| `NO_RESET_COOLDOWN` | 否   | 设为 `"true"` 以跳过请求重置与确认之间的 30 分钟冷却期。即使设置此项，2FA 仍然要求。                              |
 
 ### 绑定
 
@@ -247,3 +251,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 - 拉取 IMAP 邮箱（`email_receive_provider = imap` 时）；
 - 清理 `app_event_queue` 与 `pow_used` 中的过期记录；
 - 回收 `image_proxy_mappings` 中已无源行的孤儿映射。
+
+### 用户 / 团队删除锁定
+
+如果你有绝对不能被删除的用户或团队 —— 共享服务账号、机器人身份或关键组织团队 ——
+请在 `wrangler.jsonc` 中设置 `LOCKDOWN_USERS` 和 `LOCKDOWN_TEAMS`。
+被锁定的账号在管理员（或团队所有者）尝试通过 API 删除时会返回 403 错误。
+
+变量接受逗号、分号或空格分隔的名称列表，每个名称的首尾空白会被自动去除。

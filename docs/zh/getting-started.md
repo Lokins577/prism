@@ -101,6 +101,15 @@ bun db:migrate:prod     # 线上 D1
 
 本地开发可保持默认，开发服务器使用 `http://localhost:5173`。
 
+`vars` 块中还包含三个可选的零配置开关：
+
+- `LOCKDOWN_USERS` / `LOCKDOWN_TEAMS` — 逗号分隔的用户名/团队名称列表，
+  列表中的记录将永久受保护，无法删除（API 返回 403）。留空即禁用。
+- `ENABLE_RESET` — 设为 `"true"` 后在管理面板 Danger Zone 中显示 **站点重置** 按钮。
+  为防误操作，默认隐藏。`NO_RESET_COOLDOWN` 可跳过确认前的 30 分钟等待。
+
+详见 [配置](configuration.md#wrangler-绑定与变量) 了解所有 Wrangler 变量与绑定。
+
 ## 5. 启动开发服务器
 
 ```bash
