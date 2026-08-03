@@ -1468,7 +1468,27 @@
     "stagedDissolveTitle": "解散团队并注销其账号",
     "stagedDissolveBody": "通过 {{name}} 的邀请链接创建的账号将立即停用，并在宽限期结束后永久删除。用自己的 Prism 账号加入的成员不受影响。",
     "stagedDissolveConfirmLabel": "输入团队名称（{{name}}）以确认",
-    "stagedDissolveStart": "开始解散"
+    "stagedDissolveStart": "开始解散",
+    "enableInviteRegistration": "启用团队邀请链接注册",
+    "enableInviteRegistrationHint": "允许已授权的团队发放可创建账号的链接。每个团队仍需在「管理 → 团队」中单独获得授权。",
+    "inviteRegMaxUsesCap": "单个注册邀请的次数上限",
+    "inviteRegMaxUsesCapHint": "团队可设置的使用次数天花板。这是注册总量唯一的硬边界。",
+    "inviteRegRatePerHour": "单个邀请每小时注册次数",
+    "inviteRegRatePerHourHint": "按 IP 限流约束不了被广传的链接，这一项可以。",
+    "pendingTtlHours": "未完成注册的存活时长（小时）",
+    "pendingTtlHoursHint": "始终未完成加入的账号会在此之后被删除。",
+    "dissolveGraceHours": "解散宽限期（小时）",
+    "dissolveGraceHoursHint": "从停用被解散团队的账号到实际删除之间的间隔。",
+    "restrictedCapsLabel": "放开给邀请注册账号的功能（默认全部拒绝）",
+    "capTeamCreate": "创建团队",
+    "capAppCreate": "创建应用",
+    "capDomainCreate": "验证域名",
+    "capPatCreate": "个人访问令牌",
+    "capProfilePublic": "公开主页",
+    "capGpgManage": "GPG 密钥",
+    "capSelfConvert": "转换为完整账号",
+    "skipEmailForInvites": "让该团队的邀请注册跳过邮箱验证",
+    "requireEmailForInvites": "恢复该团队邀请注册的邮箱验证要求"
   },
   "webhooks": {
     "title": "Webhooks",
@@ -1779,7 +1799,11 @@
     "joinFailed": "加入失败",
     "pendingNotice": "在完成之前，此账号只能管理自己的安全设置。",
     "unavailableTitle": "不可用",
-    "unavailableDesc": "该注册链接当前未启用。请检查链接，或向邀请你的人索取一个新的。"
+    "unavailableDesc": "该注册链接当前未启用。请检查链接，或向邀请你的人索取一个新的。",
+    "usernameField": "用户名",
+    "displayNameField": "显示名",
+    "emailField": "邮箱",
+    "passwordField": "密码"
   },
   "restriction": {
     "title": "账号类型",

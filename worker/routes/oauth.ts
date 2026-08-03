@@ -44,6 +44,7 @@ import {
   checkAppAuthorizationAllowed,
   getRestrictionState,
   hasLiveRestrictedAccounts,
+  sanitizeRestrictedCapabilities,
 } from "../lib/userCapabilities";
 import {
   getGroupsForTeamMembers,
@@ -3951,6 +3952,11 @@ app.patch("/me/admin/config", async (c) => {
   if (updates.default_team_role_permissions !== undefined) {
     updates.default_team_role_permissions = sanitizeRolePermissions(
       updates.default_team_role_permissions,
+    );
+  }
+  if (updates.restricted_user_capabilities !== undefined) {
+    updates.restricted_user_capabilities = sanitizeRestrictedCapabilities(
+      updates.restricted_user_capabilities,
     );
   }
 

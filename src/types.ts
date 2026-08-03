@@ -71,6 +71,24 @@ export interface SiteConfig {
   default_team_profile_show_sub_teams: boolean;
   default_team_require_2fa: boolean;
   default_team_require_verified_email: boolean;
+  /** Master switch for team-invite registration. Off by default: turning it
+   *  on is what lets a team owner mint accounts at all, and even then each
+   *  team needs its own site-admin grant. */
+  enable_team_invite_registration: boolean;
+  /** Ceiling on the usage limit a team may set on a registration-capable
+   *  invite — the only hard bound on registration volume. */
+  team_invite_registration_max_uses_cap: number;
+  /** Registrations per hour per invite. Per-IP limiting cannot bound a link
+   *  shared to thousands of people. */
+  team_invite_registration_rate_per_hour: number;
+  /** Features granted to invite-registered accounts. Absent keys fall back
+   *  to the built-in defaults, which deny everything. */
+  restricted_user_capabilities: Partial<Record<string, boolean>>;
+  /** How long an unfinished registration survives before it is reaped. */
+  restricted_pending_ttl_hours: number;
+  /** Grace period between a dissolution deactivating accounts and the
+   *  reaper deleting them. */
+  restricted_dissolve_grace_hours: number;
   /** Master switch for the sub-team feature. When false the server rejects
    *  every sub-team endpoint and the UI hides sub-team affordances. */
   enable_sub_teams: boolean;

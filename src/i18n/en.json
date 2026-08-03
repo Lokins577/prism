@@ -1468,7 +1468,27 @@
     "stagedDissolveTitle": "Dissolve team and delete its accounts",
     "stagedDissolveBody": "Accounts created through {{name}}’s invite links will be deactivated now and permanently deleted after the grace period. Members who joined with their own Prism accounts are not affected.",
     "stagedDissolveConfirmLabel": "Type the team name ({{name}}) to confirm",
-    "stagedDissolveStart": "Start dissolution"
+    "stagedDissolveStart": "Start dissolution",
+    "enableInviteRegistration": "Enable team-invite registration",
+    "enableInviteRegistrationHint": "Lets authorised teams hand out links that create accounts. Each team still needs its own grant under Admin → Teams.",
+    "inviteRegMaxUsesCap": "Max uses per registration invite",
+    "inviteRegMaxUsesCapHint": "Ceiling on the usage limit a team may set. This is the only hard bound on registration volume.",
+    "inviteRegRatePerHour": "Registrations per hour per invite",
+    "inviteRegRatePerHourHint": "Per-IP limiting cannot bound a link shared to thousands of people; this can.",
+    "pendingTtlHours": "Unfinished registration TTL (hours)",
+    "pendingTtlHoursHint": "Accounts that never finish joining are deleted after this.",
+    "dissolveGraceHours": "Dissolution grace period (hours)",
+    "dissolveGraceHoursHint": "Between deactivating a dissolved team’s accounts and deleting them.",
+    "restrictedCapsLabel": "Features granted to invite-registered accounts (all denied by default)",
+    "capTeamCreate": "Create teams",
+    "capAppCreate": "Create applications",
+    "capDomainCreate": "Verify domains",
+    "capPatCreate": "Personal access tokens",
+    "capProfilePublic": "Public profile",
+    "capGpgManage": "GPG keys",
+    "capSelfConvert": "Convert to a full account",
+    "skipEmailForInvites": "Skip email verification for this team's invite registrations",
+    "requireEmailForInvites": "Require email verification again for this team's invite registrations"
   },
   "webhooks": {
     "title": "Webhooks",
@@ -1779,7 +1799,11 @@
     "joinFailed": "Could not complete the join",
     "pendingNotice": "Until you finish, your account can only manage its own security settings.",
     "unavailableTitle": "Not available",
-    "unavailableDesc": "This registration link is not active. Check the link, or ask whoever invited you for a new one."
+    "unavailableDesc": "This registration link is not active. Check the link, or ask whoever invited you for a new one.",
+    "usernameField": "Username",
+    "displayNameField": "Display name",
+    "emailField": "Email",
+    "passwordField": "Password"
   },
   "restriction": {
     "title": "Account type",

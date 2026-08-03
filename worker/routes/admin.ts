@@ -57,7 +57,10 @@ import type {
 } from "../types";
 import { isUserLocked, isTeamLocked } from "../lib/lockdown";
 import { sanitizeRolePermissions } from "../lib/teamGroups";
-import { hasLiveRestrictedAccounts } from "../lib/userCapabilities";
+import {
+  hasLiveRestrictedAccounts,
+  sanitizeRestrictedCapabilities,
+} from "../lib/userCapabilities";
 import { hashLookupCandidate } from "../lib/secretCrypto";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
@@ -173,6 +176,12 @@ app.patch("/config", async (c) => {
     "inherit_team_domains",
     "default_team_profile_show_sub_teams",
     "default_team_role_permissions",
+    "enable_team_invite_registration",
+    "team_invite_registration_max_uses_cap",
+    "team_invite_registration_rate_per_hour",
+    "restricted_user_capabilities",
+    "restricted_pending_ttl_hours",
+    "restricted_dissolve_grace_hours",
   ]);
 
   const updates: Record<string, unknown> = {};
@@ -235,6 +244,12 @@ app.patch("/config", async (c) => {
   if (updates.default_team_role_permissions !== undefined) {
     updates.default_team_role_permissions = sanitizeRolePermissions(
       updates.default_team_role_permissions,
+    );
+  }
+
+  if (updates.restricted_user_capabilities !== undefined) {
+    updates.restricted_user_capabilities = sanitizeRestrictedCapabilities(
+      updates.restricted_user_capabilities,
     );
   }
 
@@ -1867,6 +1882,11 @@ app.get("/teams", async (c) => {
         ...t,
         avatar_url: await proxyImageUrl(c.env.APP_URL, c.env.DB, t.avatar_url),
         unproxied_avatar_url: t.avatar_url,
+        // Parsed rather than raw JSON so the admin UI can toggle it without
+        // knowing the storage format.
+        invite_registration_exemptions: t.invite_registration_exemptions
+          ? (JSON.parse(t.invite_registration_exemptions) as unknown)
+          : {},
       })),
     ),
     total: count?.n ?? 0,

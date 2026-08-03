@@ -28,6 +28,7 @@ import {
   DeleteRegular,
   DismissCircleRegular,
   EditRegular,
+  MailRegular,
   PersonAddRegular,
 } from "@fluentui/react-icons";
 import { useState } from "react";
@@ -71,6 +72,26 @@ export function AdminTeams() {
     name: string;
   } | null>(null);
   const [dissolveConfirm, setDissolveConfirm] = useState("");
+
+  // Email verification is the one site-level check a team's invite path may
+  // skip — it is the only one whose cost scales with the number of
+  // registrations. Captcha, proof-of-work and every rate limit stay on.
+  const handleToggleExemption = async (id: string, skipEmail: boolean) => {
+    setBusyTeam(id);
+    try {
+      await api.adminSetInviteRegistration(id, {
+        exemptions: { email_verification: skipEmail },
+      });
+      await qc.invalidateQueries({ queryKey: ["admin-teams"] });
+    } catch (err) {
+      showMsg?.(
+        "error",
+        err instanceof ApiError ? err.message : "Failed to update",
+      );
+    } finally {
+      setBusyTeam(null);
+    }
+  };
 
   const handleToggleGrant = async (id: string, granted: boolean) => {
     setBusyTeam(id);
@@ -226,6 +247,39 @@ export function AdminTeams() {
                           }
                         />
                       </Tooltip>
+                      {team.invite_registration_granted && (
+                        <Tooltip
+                          relationship="label"
+                          content={
+                            team.invite_registration_exemptions
+                              ?.email_verification
+                              ? t("admin.requireEmailForInvites")
+                              : t("admin.skipEmailForInvites")
+                          }
+                        >
+                          <Button
+                            size="small"
+                            appearance="subtle"
+                            disabled={busyTeam === team.id}
+                            icon={<MailRegular />}
+                            style={
+                              team.invite_registration_exemptions
+                                ?.email_verification
+                                ? {
+                                    color: tokens.colorPaletteYellowForeground1,
+                                  }
+                                : undefined
+                            }
+                            onClick={() =>
+                              handleToggleExemption(
+                                team.id,
+                                !team.invite_registration_exemptions
+                                  ?.email_verification,
+                              )
+                            }
+                          />
+                        </Tooltip>
+                      )}
                       {team.invite_registration_granted && (
                         <Tooltip
                           relationship="label"
