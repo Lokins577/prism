@@ -551,7 +551,7 @@ export function TeamDetail() {
         style={{ marginBottom: 24 }}
       >
         <Tab value="members" icon={<PeopleRegular />}>
-          {t("teams.membersTab", { count: members.length })}
+          {t("teams.membersTab", { count: data?.member_count ?? members.length })}
         </Tab>
         {/* Visible to managers even while the feature is off, so an owner
             can find the switch and see what's already defined. */}
@@ -607,7 +607,9 @@ export function TeamDetail() {
           )}
 
           <MembersTable
+            teamId={id!}
             members={members}
+            memberCount={data?.member_count ?? members.length}
             canManage={canManage}
             isOwner={isOwner}
             isCoOwnerOrAbove={isCoOwnerOrAbove}
