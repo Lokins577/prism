@@ -210,17 +210,17 @@ export function JoinRegister() {
               placeholder={t("join.invitePlaceholder")}
             />
           </Field>
-          <Field label={t("auth.username")} required>
+          <Field label={t("join.usernameField")} required>
             <Input value={form.username} onChange={update("username")} />
           </Field>
-          <Field label={t("auth.displayName")}>
+          <Field label={t("join.displayNameField")}>
             <Input
               value={form.display_name}
               onChange={update("display_name")}
             />
           </Field>
           {info.collects_email && (
-            <Field label={t("auth.email")} required>
+            <Field label={t("join.emailField")} required>
               <Input
                 type="email"
                 value={form.email}
@@ -228,7 +228,7 @@ export function JoinRegister() {
               />
             </Field>
           )}
-          <Field label={t("auth.password")} required>
+          <Field label={t("join.passwordField")} required>
             <PasswordInput
               value={form.password}
               onChange={(e) =>

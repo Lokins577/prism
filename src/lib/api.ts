@@ -1326,12 +1326,7 @@ export const api = {
       /** Total across the team, not the page. */
       member_count: number;
       member_page: { page: number; limit: number };
-    }>(
-      "GET",
-      `/teams/${id}`,
-      undefined,
-      getToken(),
-    ),
+    }>("GET", `/teams/${id}`, undefined, getToken()),
   updateTeam: (
     id: string,
     body: {
@@ -1842,6 +1837,24 @@ export interface SitePublicConfig {
    *  effectively requires the factor regardless of the per-team flag. */
   default_team_require_2fa: boolean;
   default_team_require_verified_email: boolean;
+  /** Master switch for team-invite registration. Off by default: turning it
+   *  on is what lets a team owner mint accounts at all, and even then each
+   *  team needs its own site-admin grant. */
+  enable_team_invite_registration: boolean;
+  /** Ceiling on the usage limit a team may set on a registration-capable
+   *  invite — the only hard bound on registration volume. */
+  team_invite_registration_max_uses_cap: number;
+  /** Registrations per hour per invite. Per-IP limiting cannot bound a link
+   *  shared to thousands of people. */
+  team_invite_registration_rate_per_hour: number;
+  /** Features granted to invite-registered accounts. Absent keys fall back
+   *  to the built-in defaults, which deny everything. */
+  restricted_user_capabilities: Partial<Record<string, boolean>>;
+  /** How long an unfinished registration survives before it is reaped. */
+  restricted_pending_ttl_hours: number;
+  /** Grace period between a dissolution deactivating accounts and the
+   *  reaper deleting them. */
+  restricted_dissolve_grace_hours: number;
   /** Master switch for the sub-team feature. When `false`, the UI hides
    *  the Sub-teams tab + dialog and the server rejects every sub-team
    *  endpoint. */
@@ -2338,6 +2351,9 @@ export interface AdminTeam {
    *  links. The admin list surfaces it so the grant can be toggled inline. */
   invite_registration_granted: number;
   invite_registration_enabled: number;
+  /** Site-level registration checks this team's invite path may skip.
+   *  Only email verification is exemptible. */
+  invite_registration_exemptions: { email_verification?: boolean };
   /** Non-null while a staged dissolution is in flight. */
   dissolving_at: number | null;
   created_at: number;

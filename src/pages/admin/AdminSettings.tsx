@@ -609,6 +609,130 @@ export function AdminSettings() {
                 onChange={(_, d) => set("inherit_team_domains", d.checked)}
               />
             </div>
+            <Switch
+              label={t("admin.enableInviteRegistration")}
+              checked={get("enable_team_invite_registration") ?? false}
+              onChange={(_, d) =>
+                set("enable_team_invite_registration", d.checked)
+              }
+            />
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              {t("admin.enableInviteRegistrationHint")}
+            </Text>
+            <div className={styles.subGroup}>
+              <Field
+                label={t("admin.inviteRegMaxUsesCap")}
+                hint={t("admin.inviteRegMaxUsesCapHint")}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(
+                    get("team_invite_registration_max_uses_cap") ?? 1000,
+                  )}
+                  onChange={(e) =>
+                    set(
+                      "team_invite_registration_max_uses_cap",
+                      Number(e.target.value),
+                    )
+                  }
+                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  style={{ width: 120 }}
+                />
+              </Field>
+              <Field
+                label={t("admin.inviteRegRatePerHour")}
+                hint={t("admin.inviteRegRatePerHourHint")}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(
+                    get("team_invite_registration_rate_per_hour") ?? 200,
+                  )}
+                  onChange={(e) =>
+                    set(
+                      "team_invite_registration_rate_per_hour",
+                      Number(e.target.value),
+                    )
+                  }
+                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  style={{ width: 120 }}
+                />
+              </Field>
+              <Field
+                label={t("admin.pendingTtlHours")}
+                hint={t("admin.pendingTtlHoursHint")}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(get("restricted_pending_ttl_hours") ?? 72)}
+                  onChange={(e) =>
+                    set("restricted_pending_ttl_hours", Number(e.target.value))
+                  }
+                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  style={{ width: 120 }}
+                />
+              </Field>
+              <Field
+                label={t("admin.dissolveGraceHours")}
+                hint={t("admin.dissolveGraceHoursHint")}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(get("restricted_dissolve_grace_hours") ?? 168)}
+                  onChange={(e) =>
+                    set(
+                      "restricted_dissolve_grace_hours",
+                      Number(e.target.value),
+                    )
+                  }
+                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  style={{ width: 120 }}
+                />
+              </Field>
+              <Text
+                size={200}
+                style={{ color: tokens.colorNeutralForeground3 }}
+              >
+                {t("admin.restrictedCapsLabel")}
+              </Text>
+              {(
+                [
+                  ["team:create", "admin.capTeamCreate"],
+                  ["app:create", "admin.capAppCreate"],
+                  ["domain:create", "admin.capDomainCreate"],
+                  ["pat:create", "admin.capPatCreate"],
+                  ["profile:public", "admin.capProfilePublic"],
+                  ["gpg:manage", "admin.capGpgManage"],
+                  ["self:convert", "admin.capSelfConvert"],
+                ] as const
+              ).map(([key, label]) => {
+                const caps =
+                  (get("restricted_user_capabilities") as Record<
+                    string,
+                    boolean
+                  > | null) ?? {};
+                return (
+                  <Switch
+                    key={key}
+                    label={t(label)}
+                    checked={caps[key] ?? false}
+                    disabled={
+                      !(get("enable_team_invite_registration") ?? false)
+                    }
+                    onChange={(_, d) =>
+                      set("restricted_user_capabilities", {
+                        ...caps,
+                        [key]: d.checked,
+                      })
+                    }
+                  />
+                );
+              })}
+            </div>
             <Field
               label={t("admin.ipv6RateLimitPrefix")}
               hint={t("admin.ipv6RateLimitPrefixHint")}
