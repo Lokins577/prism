@@ -36,29 +36,14 @@ import {
   unmetRequirements,
   type EffectiveTeamRequirements,
 } from "../lib/teamRequirements";
-import { syntheticEmail } from "../lib/userCapabilities";
-import type {
-  InviteRegistrationExemptions,
-  TeamRow,
-  UserRow,
-  Variables,
-} from "../types";
+import {
+  parseInviteRegistrationExemptions,
+  syntheticEmail,
+} from "../lib/userCapabilities";
+import type { TeamRow, UserRow, Variables } from "../types";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
 const app = new Hono<AppEnv>();
-
-/** Parse the site-admin-set exemptions blob, tolerating garbage. */
-function parseExemptions(raw: string | null): InviteRegistrationExemptions {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return {};
-    return parsed as InviteRegistrationExemptions;
-  } catch {
-    return {};
-  }
-}
 
 /**
  * Load a team that is currently able to mint accounts, or null.
@@ -126,7 +111,9 @@ async function effectiveRequirements(
     },
     floor,
   );
-  const exemptions = parseExemptions(team.invite_registration_exemptions);
+  const exemptions = parseInviteRegistrationExemptions(
+    team.invite_registration_exemptions,
+  );
   if (!exemptions.email_verification) return merged;
   // An exemption overrides the site floor as well as the team's own flag —
   // that is precisely what a site admin is granting when they set it, since
@@ -151,7 +138,9 @@ app.get("/join/:teamId", async (c) => {
 
   const requirements = await effectiveRequirements(c.env.DB, team);
   const config = await getConfig(c.env.DB);
-  const exemptions = parseExemptions(team.invite_registration_exemptions);
+  const exemptions = parseInviteRegistrationExemptions(
+    team.invite_registration_exemptions,
+  );
 
   return c.json({
     team: {
@@ -268,7 +257,9 @@ app.post("/auth/register-with-invite", async (c) => {
       429,
     );
 
-  const exemptions = parseExemptions(team.invite_registration_exemptions);
+  const exemptions = parseInviteRegistrationExemptions(
+    team.invite_registration_exemptions,
+  );
   const collectsEmail = !exemptions.email_verification;
 
   let email: string;

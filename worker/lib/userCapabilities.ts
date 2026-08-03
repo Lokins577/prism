@@ -23,6 +23,7 @@
 
 import { getConfigValue } from "./config";
 import type {
+  InviteRegistrationExemptions,
   RestrictedCapabilities,
   RestrictedCapability,
   UserRow,
@@ -341,6 +342,33 @@ export async function subtreeHasRestrictedMembers(
     .bind(...ids)
     .first<{ x: number }>();
   return !!row;
+}
+
+/**
+ * Tolerant parse of `teams.invite_registration_exemptions`.
+ *
+ * Malformed content degrades to "nothing exempted" rather than throwing. The
+ * admin team listing reads this column for every row, so one bad blob — a
+ * hand-edited row, a legacy write — would otherwise take the whole listing
+ * down with it. Falling back also fails *safe*: an unreadable exemption
+ * means the check stays enforced.
+ */
+export function parseInviteRegistrationExemptions(
+  raw: string | null,
+): InviteRegistrationExemptions {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
+    const bag = parsed as Record<string, unknown>;
+    const out: InviteRegistrationExemptions = {};
+    if (typeof bag.email_verification === "boolean")
+      out.email_verification = bag.email_verification;
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 // ─── Synthetic addresses ─────────────────────────────────────────────────────

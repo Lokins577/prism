@@ -57,7 +57,11 @@ import type {
 } from "../types";
 import { isUserLocked, isTeamLocked } from "../lib/lockdown";
 import { sanitizeRolePermissions } from "../lib/teamGroups";
-import { hasLiveRestrictedAccounts } from "../lib/userCapabilities";
+import {
+  hasLiveRestrictedAccounts,
+  parseInviteRegistrationExemptions,
+  sanitizeRestrictedCapabilities,
+} from "../lib/userCapabilities";
 import { hashLookupCandidate } from "../lib/secretCrypto";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
@@ -173,6 +177,12 @@ app.patch("/config", async (c) => {
     "inherit_team_domains",
     "default_team_profile_show_sub_teams",
     "default_team_role_permissions",
+    "enable_team_invite_registration",
+    "team_invite_registration_max_uses_cap",
+    "team_invite_registration_rate_per_hour",
+    "restricted_user_capabilities",
+    "restricted_pending_ttl_hours",
+    "restricted_dissolve_grace_hours",
   ]);
 
   const updates: Record<string, unknown> = {};
@@ -235,6 +245,12 @@ app.patch("/config", async (c) => {
   if (updates.default_team_role_permissions !== undefined) {
     updates.default_team_role_permissions = sanitizeRolePermissions(
       updates.default_team_role_permissions,
+    );
+  }
+
+  if (updates.restricted_user_capabilities !== undefined) {
+    updates.restricted_user_capabilities = sanitizeRestrictedCapabilities(
+      updates.restricted_user_capabilities,
     );
   }
 
@@ -1867,6 +1883,12 @@ app.get("/teams", async (c) => {
         ...t,
         avatar_url: await proxyImageUrl(c.env.APP_URL, c.env.DB, t.avatar_url),
         unproxied_avatar_url: t.avatar_url,
+        // Parsed rather than raw JSON so the admin UI can toggle it without
+        // knowing the storage format. Tolerant, because this runs for every
+        // row in the listing and one malformed blob must not 500 the page.
+        invite_registration_exemptions: parseInviteRegistrationExemptions(
+          t.invite_registration_exemptions,
+        ),
       })),
     ),
     total: count?.n ?? 0,
@@ -1987,9 +2009,9 @@ app.patch("/teams/:id/invite-registration", async (c) => {
   return c.json({
     invite_registration_granted: updated?.invite_registration_granted === 1,
     invite_registration_enabled: updated?.invite_registration_enabled === 1,
-    invite_registration_exemptions: updated?.invite_registration_exemptions
-      ? (JSON.parse(updated.invite_registration_exemptions) as unknown)
-      : {},
+    invite_registration_exemptions: parseInviteRegistrationExemptions(
+      updated?.invite_registration_exemptions ?? null,
+    ),
   });
 });
 
