@@ -214,6 +214,57 @@ export const api = {
   // ─── Auth ────────────────────────────────────────────────────────────────
   register: (body: RegisterBody) =>
     request<AuthResponse>("POST", "/auth/register", body),
+
+  // ── Team-invite registration ────────────────────────────────────────────
+  joinPageInfo: (teamId: string) =>
+    request<JoinPageInfo>("GET", `/join/${encodeURIComponent(teamId)}`),
+  registerWithInvite: (body: {
+    team_id: string;
+    invite_token: string;
+    username: string;
+    password: string;
+    display_name?: string;
+    /** Omitted when the team's invite path skips email collection. */
+    email?: string;
+    captcha_token?: string;
+    pow_challenge?: string;
+    pow_nonce?: number;
+  }) =>
+    request<{
+      token: string;
+      user: UserProfile;
+      pending: true;
+      requirements: JoinRequirements;
+      synthetic_email: boolean;
+    }>("POST", "/auth/register-with-invite", body),
+  inviteJoinStatus: () =>
+    request<{
+      team: { id: string; name: string; avatar_url: string | null };
+      requirements: JoinRequirements;
+      unmet: string[];
+      synthetic_email: boolean;
+    }>("GET", "/auth/invite-join/status", undefined, getToken()),
+  completeInviteJoin: () =>
+    request<{ message: string; team_id: string }>(
+      "POST",
+      "/auth/invite-join/complete",
+      undefined,
+      getToken(),
+    ),
+  myRestriction: () =>
+    request<RestrictionInfo>(
+      "GET",
+      "/user/me/restriction",
+      undefined,
+      getToken(),
+    ),
+  convertAccount: () =>
+    request<{ message: string; converted_at: number }>(
+      "POST",
+      "/user/me/convert",
+      undefined,
+      getToken(),
+    ),
   login: (body: LoginBody) =>
     request<LoginResponse>("POST", "/auth/login", body),
   logout: () =>
@@ -1013,6 +1064,55 @@ export const api = {
       {},
       getToken(),
     ),
+  adminSetInviteRegistration: (
+    teamId: string,
+    body: { granted?: boolean; exemptions?: { email_verification?: boolean } },
+  ) =>
+    request<{
+      invite_registration_granted: boolean;
+      invite_registration_enabled: boolean;
+      invite_registration_exemptions: { email_verification?: boolean };
+    }>(
+      "PATCH",
+      `/admin/teams/${encodeURIComponent(teamId)}/invite-registration`,
+      body,
+      getToken(),
+    ),
+  adminStartDissolve: (teamId: string, confirm: string) =>
+    request<{ message: string; deactivated_accounts: number }>(
+      "POST",
+      `/admin/teams/${encodeURIComponent(teamId)}/dissolve`,
+      { confirm },
+      getToken(),
+    ),
+  adminCancelDissolve: (teamId: string) =>
+    request<{ message: string }>(
+      "POST",
+      `/admin/teams/${encodeURIComponent(teamId)}/dissolve/cancel`,
+      undefined,
+      getToken(),
+    ),
+  adminListRestrictedUsers: (params: {
+    team_id?: string;
+    invite_token?: string;
+  }) =>
+    request<{
+      users: Array<{
+        id: string;
+        username: string;
+        email: string;
+        is_active: number;
+        created_at: number;
+        origin_team_id: string;
+        origin_join_completed: number;
+        converted_at: number | null;
+      }>;
+    }>(
+      "GET",
+      `/admin/restricted-users?${new URLSearchParams(params as Record<string, string>).toString()}`,
+      undefined,
+      getToken(),
+    ),
   adminTeamsAsUsersStatus: () =>
     request<{
       teams_total: number;
@@ -1252,6 +1352,12 @@ export const api = {
       require_verified_email?: boolean;
       /** Owner-only. */
       enable_groups?: boolean;
+      /** Owner-only, and only meaningful once a site admin has granted the
+       *  team permission to mint accounts. */
+      invite_registration_enabled?: boolean;
+      /** Team management setting: may unrestricted accounts join via invite
+       *  link? Direct adds by an admin are never subject to it. */
+      allow_normal_user_join?: boolean;
       /** Owner-only. Only the keys present are overridden; drop a key to let
        *  it fall back to the site default. */
       role_permissions?: TeamRolePermissions;
@@ -1507,6 +1613,9 @@ export const api = {
       email?: string;
       max_uses?: number;
       ttl_hours?: number;
+      /** Makes the link able to create accounts. Requires a finite max_uses
+       *  and forces the granted role to `member`. */
+      allows_registration?: boolean;
     },
   ) =>
     request<{ invite: TeamInvite }>(
@@ -1945,6 +2054,56 @@ export interface OAuthConsent {
   tokens: OAuthToken[];
 }
 
+/** What the standalone /join/<teamId> page needs to render itself. */
+export interface JoinPageInfo {
+  team: {
+    id: string;
+    name: string;
+    description: string;
+    avatar_url: string | null;
+  };
+  requirements: JoinRequirements;
+  /** False when the team's invite path skips email collection entirely — the
+   *  account gets a synthesised placeholder it can replace later. */
+  collects_email: boolean;
+  captcha_provider: string;
+  captcha_site_key: string;
+  pow_difficulty: number;
+  /** Always true: the page must state that dissolving the team deletes the
+   *  accounts it created, before anyone signs up. */
+  deletion_notice: boolean;
+}
+
+export interface JoinRequirements {
+  require_2fa: boolean;
+  require_verified_email: boolean;
+  forced_by_site: { require_2fa: boolean; require_verified_email: boolean };
+}
+
+export type RestrictedCapability =
+  | "team:create"
+  | "app:create"
+  | "domain:create"
+  | "pat:create"
+  | "profile:public"
+  | "gpg:manage"
+  | "self:convert";
+
+/** Whether the signed-in account is operating under invite-registration
+ *  restrictions, and what it would take to lift them. */
+export interface RestrictionInfo {
+  restricted: boolean;
+  converted_at?: number | null;
+  pending_join?: boolean;
+  origin_team?: { id: string; name: string } | null;
+  capabilities?: Record<RestrictedCapability, boolean>;
+  conversion?: {
+    available: boolean;
+    needs_real_email: boolean;
+    synthetic_email: boolean;
+  };
+}
+
 export interface Team {
   id: string;
   name: string;
@@ -1984,6 +2143,19 @@ export interface Team {
    *  to remove their last 2FA factor or unverify their email. */
   require_2fa: boolean;
   require_verified_email: boolean;
+  /** Site-admin grant: may this team mint accounts through invite links?
+   *  Read-only to the team; only an instance admin can change it. */
+  invite_registration_granted: boolean;
+  /** The team owner's own switch, meaningful only while granted. */
+  invite_registration_enabled: boolean;
+  /** Site-level registration checks this team's invite path may skip.
+   *  Set by a site admin; captcha, proof-of-work and rate limits are never
+   *  exemptible and never appear here. */
+  invite_registration_exemptions: { email_verification?: boolean };
+  /** Whether unrestricted accounts may join through an invite link. */
+  allow_normal_user_join: boolean;
+  /** Set while a staged dissolution is in flight. */
+  dissolving_at: number | null;
   /** Owner-only opt-in for member groups. Off by default; while off no read
    *  surface emits groups, but the definitions and assignments are kept. */
   enable_groups: boolean;
@@ -2162,6 +2334,12 @@ export interface AdminTeam {
   member_count: number;
   app_count: number;
   owner_username: string | null;
+  /** Site-admin grant allowing this team to mint accounts through invite
+   *  links. The admin list surfaces it so the grant can be toggled inline. */
+  invite_registration_granted: number;
+  invite_registration_enabled: number;
+  /** Non-null while a staged dissolution is in flight. */
+  dissolving_at: number | null;
   created_at: number;
   updated_at: number;
 }

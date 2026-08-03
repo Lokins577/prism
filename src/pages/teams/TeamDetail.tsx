@@ -409,6 +409,25 @@ export function TeamDetail() {
     }
   };
 
+  const handleTeamFlagChange = async (
+    field: "invite_registration_enabled" | "allow_normal_user_join",
+    value: boolean,
+  ) => {
+    if (!id) return;
+    setSavingRequirement(field);
+    try {
+      await api.updateTeam(id, { [field]: value });
+      await qc.invalidateQueries({ queryKey: ["team", id] });
+    } catch (err) {
+      showMsg(
+        "error",
+        err instanceof ApiError ? err.message : t("teams.failedUpdateTeam"),
+      );
+    } finally {
+      setSavingRequirement(null);
+    }
+  };
+
   const handleEnableGroupsChange = async (value: boolean) => {
     if (!id) return;
     setSavingRequirement("enable_groups");
@@ -760,7 +779,14 @@ export function TeamDetail() {
               marginBottom: 12,
             }}
           >
-            <InviteDialog teamId={id!} showMsg={showMsg} />
+            <InviteDialog
+              teamId={id!}
+              canRegister={
+                team.invite_registration_granted &&
+                team.invite_registration_enabled
+              }
+              showMsg={showMsg}
+            />
           </div>
 
           {invitesLoading && <SkeletonTableRows rows={3} cols={4} />}
@@ -1092,6 +1118,91 @@ export function TeamDetail() {
               />
             </div>
           )}
+
+          {/* Only shown once a site admin has authorised the team, or while
+              it is already on — there is nothing an owner can do about it
+              otherwise, and an inert switch invites support questions. */}
+          {isOwner &&
+            (team.invite_registration_granted ||
+              team.invite_registration_enabled) && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                  padding: 16,
+                  border: `1px solid ${tokens.colorNeutralStroke1}`,
+                  borderRadius: 8,
+                }}
+              >
+                <div>
+                  <Text weight="semibold" size={400} block>
+                    {t("teams.inviteRegTitle")}
+                  </Text>
+                  <Text
+                    size={200}
+                    block
+                    style={{
+                      color: tokens.colorNeutralForeground3,
+                      marginTop: 4,
+                    }}
+                  >
+                    {t("teams.inviteRegDesc")}
+                  </Text>
+                </div>
+
+                {!team.invite_registration_granted ? (
+                  <MessageBar intent="info">
+                    {t("teams.inviteRegNotGranted")}
+                  </MessageBar>
+                ) : (
+                  <>
+                    <Switch
+                      label={t("teams.inviteRegEnable")}
+                      checked={team.invite_registration_enabled}
+                      disabled={
+                        savingRequirement === "invite_registration_enabled"
+                      }
+                      onChange={(_, d) =>
+                        handleTeamFlagChange(
+                          "invite_registration_enabled",
+                          d.checked,
+                        )
+                      }
+                    />
+                    {team.invite_registration_exemptions
+                      ?.email_verification && (
+                      <MessageBar intent="warning">
+                        {t("teams.inviteRegExemptEmail")}
+                      </MessageBar>
+                    )}
+                    {team.invite_registration_enabled && (
+                      <Text size={200}>
+                        {t("teams.inviteRegPageLink")}:{" "}
+                        <Link href={`/join/${team.id}`} target="_blank">
+                          {`${typeof window === "undefined" ? "" : window.location.origin}/join/${team.id}`}
+                        </Link>
+                      </Text>
+                    )}
+                  </>
+                )}
+
+                <Switch
+                  label={t("teams.allowNormalJoin")}
+                  checked={team.allow_normal_user_join}
+                  disabled={savingRequirement === "allow_normal_user_join"}
+                  onChange={(_, d) =>
+                    handleTeamFlagChange("allow_normal_user_join", d.checked)
+                  }
+                />
+                <Text
+                  size={200}
+                  style={{ color: tokens.colorNeutralForeground3 }}
+                >
+                  {t("teams.allowNormalJoinHint")}
+                </Text>
+              </div>
+            )}
 
           {(site?.enable_public_profiles ?? true) && (
             <div

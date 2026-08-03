@@ -36,7 +36,11 @@ import {
 import { inviteEmailTemplate } from "../lib/email";
 import { randomBase64url, randomId } from "../lib/crypto";
 import { hashBackupCodes } from "../lib/totp";
-import { recordAudit } from "../lib/audit";
+import {
+  recordAudit,
+  recordAccountDeletion,
+  auditRequestMeta,
+} from "../lib/audit";
 import {
   dissolveTeam,
   teamUserSyntheticEmail,
@@ -53,6 +57,8 @@ import type {
 } from "../types";
 import { isUserLocked, isTeamLocked } from "../lib/lockdown";
 import { sanitizeRolePermissions } from "../lib/teamGroups";
+import { hasLiveRestrictedAccounts } from "../lib/userCapabilities";
+import { hashLookupCandidate } from "../lib/secretCrypto";
 
 type AppEnv = { Bindings: Env; Variables: Variables };
 const app = new Hono<AppEnv>();
@@ -1020,6 +1026,21 @@ app.delete("/users/:id", async (c) => {
     return c.json({ error: "This user is locked and cannot be deleted" }, 403);
   }
 
+  // Before the delete, so the team fan-out can still read memberships.
+  // This also reaches team owners, which the platform-scope logAudit below
+  // does not — webhook delivery matches on (scope, scope_id).
+  await recordAccountDeletion(
+    c.env,
+    c.executionCtx,
+    { id: user.id, username: user.username },
+    {
+      actorId: admin.id,
+      actorName: admin.username,
+      cause: "admin",
+      ...auditRequestMeta(c),
+    },
+  );
+
   await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
   // A deleted user typically takes their avatar plus every README image
   // out of circulation in one shot — sweep so the proxy stops serving
@@ -1867,6 +1888,20 @@ app.delete("/teams/:id", async (c) => {
     return c.json({ error: "This team is locked and cannot be deleted" }, 403);
   }
 
+  // A team that minted accounts cannot be torn down in one request: those
+  // accounts have to go with it, and there may be thousands. Stage it
+  // instead — POST /teams/:id/dissolve deactivates them immediately and the
+  // reaper clears them over subsequent ticks.
+  if (await hasLiveRestrictedAccounts(c.env.DB, id))
+    return c.json(
+      {
+        error:
+          "This team has invite-registered accounts. Use the staged dissolution endpoint instead.",
+        staged_endpoint: `/api/admin/teams/${id}/dissolve`,
+      },
+      409,
+    );
+
   await dissolveTeam(c.env.DB, id, admin.id);
 
   // Dissolving a team takes its avatar and all of its apps' icons out
@@ -1886,6 +1921,202 @@ app.delete("/teams/:id", async (c) => {
     c.executionCtx,
   );
   return c.json({ message: "Team deleted" });
+});
+
+// ─── Invite registration (site-admin controls) ───────────────────────────────
+
+// Grant or revoke a team's permission to mint accounts through invite links,
+// and set which site-level registration requirements its invite path may
+// skip. Deliberately admin-only: this is the second of the two doors, and a
+// team owner able to open it for themselves would reduce the design to one.
+app.patch("/teams/:id/invite-registration", async (c) => {
+  const admin = c.get("user");
+  const id = c.req.param("id");
+
+  const team = await c.env.DB.prepare("SELECT id, name FROM teams WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; name: string }>();
+  if (!team) return c.json({ error: "Team not found" }, 404);
+
+  const body = await c.req.json<{
+    granted?: boolean;
+    exemptions?: { email_verification?: boolean };
+  }>();
+
+  const updates: string[] = ["updated_at = ?"];
+  const values: unknown[] = [Math.floor(Date.now() / 1000)];
+
+  if (body.granted !== undefined) {
+    updates.push("invite_registration_granted = ?");
+    values.push(body.granted ? 1 : 0);
+    // Revoking the grant closes the owner's switch too, so the channel shuts
+    // immediately instead of reopening if the grant is ever restored.
+    if (!body.granted) updates.push("invite_registration_enabled = 0");
+  }
+  if (body.exemptions !== undefined) {
+    // Only email verification is exemptible. Captcha, proof-of-work and every
+    // rate limit are structural anti-abuse measures rather than costs to be
+    // traded away, so they have no representation here.
+    const cleaned: { email_verification?: boolean } = {};
+    if (typeof body.exemptions?.email_verification === "boolean")
+      cleaned.email_verification = body.exemptions.email_verification;
+    updates.push("invite_registration_exemptions = ?");
+    values.push(Object.keys(cleaned).length ? JSON.stringify(cleaned) : null);
+  }
+
+  values.push(id);
+  await c.env.DB.prepare(`UPDATE teams SET ${updates.join(", ")} WHERE id = ?`)
+    .bind(...values)
+    .run();
+
+  await logAudit(
+    c.env,
+    admin.id,
+    "admin.team.invite_registration",
+    "team",
+    id,
+    { granted: body.granted, exemptions: body.exemptions },
+    getIp(c),
+    c.executionCtx,
+    { resourceName: team.name },
+  );
+
+  const updated = await c.env.DB.prepare("SELECT * FROM teams WHERE id = ?")
+    .bind(id)
+    .first<TeamRow>();
+  return c.json({
+    invite_registration_granted: updated?.invite_registration_granted === 1,
+    invite_registration_enabled: updated?.invite_registration_enabled === 1,
+    invite_registration_exemptions: updated?.invite_registration_exemptions
+      ? (JSON.parse(updated.invite_registration_exemptions) as unknown)
+      : {},
+  });
+});
+
+// Stage one of dissolving a team that minted accounts.
+//
+// Deactivation is a single UPDATE regardless of how many accounts there are,
+// so it completes in this request and every one of them loses dashboard
+// access at once. Deletion happens in the reaper after the grace period,
+// which also leaves a window to undo a mistake.
+app.post("/teams/:id/dissolve", async (c) => {
+  const admin = c.get("user");
+  const id = c.req.param("id");
+
+  const team = await c.env.DB.prepare("SELECT id, name FROM teams WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; name: string }>();
+  if (!team) return c.json({ error: "Team not found" }, 404);
+  if (isTeamLocked(c.env, team.name))
+    return c.json({ error: "This team is locked and cannot be deleted" }, 403);
+
+  const body = await c.req
+    .json<{ confirm?: string }>()
+    .catch(() => ({}) as { confirm?: string });
+  if (body.confirm !== team.name)
+    return c.json(
+      { error: "Confirm by sending the team name in `confirm`" },
+      400,
+    );
+
+  const now = Math.floor(Date.now() / 1000);
+  const doomed = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM users WHERE origin_team_id = ? AND converted_at IS NULL",
+  )
+    .bind(id)
+    .first<{ n: number }>();
+
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE teams SET dissolving_at = ? WHERE id = ?").bind(
+      now,
+      id,
+    ),
+    // Converted accounts are untouched — they are ordinary accounts now and
+    // may own unrelated teams and apps.
+    c.env.DB.prepare(
+      "UPDATE users SET is_active = 0, updated_at = ? WHERE origin_team_id = ? AND converted_at IS NULL",
+    ).bind(now, id),
+  ]);
+
+  await logAudit(
+    c.env,
+    admin.id,
+    "admin.team.dissolve_started",
+    "team",
+    id,
+    { deactivated_accounts: doomed?.n ?? 0 },
+    getIp(c),
+    c.executionCtx,
+    { resourceName: team.name },
+  );
+
+  return c.json({
+    message: "Dissolution started",
+    deactivated_accounts: doomed?.n ?? 0,
+  });
+});
+
+// Cancel a staged dissolution before the reaper gets to it.
+app.post("/teams/:id/dissolve/cancel", async (c) => {
+  const admin = c.get("user");
+  const id = c.req.param("id");
+
+  const now = Math.floor(Date.now() / 1000);
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE teams SET dissolving_at = NULL WHERE id = ? AND dissolving_at IS NOT NULL",
+    ).bind(id),
+    c.env.DB.prepare(
+      "UPDATE users SET is_active = 1, updated_at = ? WHERE origin_team_id = ? AND converted_at IS NULL",
+    ).bind(now, id),
+  ]);
+
+  await logAudit(
+    c.env,
+    admin.id,
+    "admin.team.dissolve_cancelled",
+    "team",
+    id,
+    {},
+    getIp(c),
+    c.executionCtx,
+  );
+  return c.json({ message: "Dissolution cancelled" });
+});
+
+// Accounts a given team (or a given invite) produced — the query an operator
+// needs when a link leaks and the damage has to be scoped.
+app.get("/restricted-users", async (c) => {
+  const teamId = c.req.query("team_id");
+  const inviteToken = c.req.query("invite_token");
+  if (!teamId && !inviteToken)
+    return c.json({ error: "team_id or invite_token is required" }, 400);
+
+  const where: string[] = ["u.origin_team_id IS NOT NULL"];
+  const args: unknown[] = [];
+  if (teamId) {
+    where.push("u.origin_team_id = ?");
+    args.push(teamId);
+  }
+  if (inviteToken) {
+    // Stored hashed, same as the invite token itself.
+    const lookup = await hashLookupCandidate(c.env, inviteToken);
+    where.push("u.origin_invite_token IN (?, ?)");
+    args.push(inviteToken, lookup ?? inviteToken);
+  }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT u.id, u.username, u.email, u.is_active, u.created_at,
+            u.origin_team_id, u.origin_join_completed, u.converted_at
+       FROM users u
+      WHERE ${where.join(" AND ")}
+      ORDER BY u.created_at DESC
+      LIMIT 500`,
+  )
+    .bind(...args)
+    .all();
+
+  return c.json({ users: results });
 });
 
 // ─── Statistics ───────────────────────────────────────────────────────────────

@@ -382,6 +382,29 @@ See [Teams](teams.md) for the full guide. Endpoint summary:
 | `POST`                    | `/api/teams/:id/apps/transfer`                       | Transfer a personal app into the team                                                                                                                                                                                                               |
 | `DELETE`                  | `/api/teams/:id/apps/:appId/transfer`                | Move a team-owned app back to the original owner                                                                                                                                                                                                    |
 
+## Invite-link registration
+
+See [Teams → Invite-link registration](teams.md#invite-link-registration) for
+the semantics.
+
+| Method  | Path                                       | Notes                                                                                                   |
+| ------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `GET`   | `/api/join/:teamId`                        | Unauthenticated. Team branding, effective requirements, captcha config. 404s when the channel is closed |
+| `POST`  | `/api/auth/register-with-invite`           | Creates a pending account and returns a session. Claims an invite seat atomically                       |
+| `GET`   | `/api/auth/invite-join/status`             | What the pending account still has to satisfy                                                           |
+| `POST`  | `/api/auth/invite-join/complete`           | Writes the membership row once requirements are met. Always joins as `member`                           |
+| `GET`   | `/api/user/me/restriction`                 | Whether the caller is restricted, its capabilities, and whether it may convert                          |
+| `POST`  | `/api/user/me/convert`                     | Lift the restriction. One-way; requires a verified real address                                         |
+| `PATCH` | `/api/admin/teams/:id/invite-registration` | Site admin: grant/revoke, and set exemptions (`email_verification` only)                                |
+| `POST`  | `/api/admin/teams/:id/dissolve`            | Site admin: stage one — deactivate the team's accounts. Confirm with the team name                      |
+| `POST`  | `/api/admin/teams/:id/dissolve/cancel`     | Undo a staged dissolution during the grace period                                                       |
+| `GET`   | `/api/admin/restricted-users`              | Accounts produced by `?team_id=` or `?invite_token=` — the query for scoping a leaked link              |
+
+`POST /api/teams/:id/invites` additionally accepts `allows_registration`, which
+requires a finite `max_uses` under the site cap and forces the role to `member`.
+`PATCH /api/teams/:id` accepts `invite_registration_enabled` (owner-only, and
+only once granted) and `allow_normal_user_join`.
+
 ## Domains
 
 | Method   | Path                      | Notes                                                                                                               |

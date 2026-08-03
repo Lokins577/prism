@@ -1,5 +1,14 @@
 // User profile routes
 
+import {
+  RESTRICTED_CAPABILITY_DEFAULTS,
+  getRestrictedCapabilities,
+  guardCapability,
+  isPendingJoin,
+  isRestricted,
+  isSyntheticEmail,
+  resolveRestrictedCapability,
+} from "../lib/userCapabilities";
 import { Hono } from "hono";
 import {
   hashPassword,
@@ -15,14 +24,18 @@ import {
   sweepOrphanedImageProxyMappings,
 } from "../lib/proxyImage";
 import { validateImageUrl } from "../lib/imageValidation";
-import { recordAudit, auditRequestMeta } from "../lib/audit";
+import {
+  recordAudit,
+  recordAccountDeletion,
+  auditRequestMeta,
+} from "../lib/audit";
 import {
   deliverUserEmailNotifications,
   notificationActorMetaFromHeaders,
   USER_NOTIFICATION_EVENTS,
   parseNotificationRules,
 } from "../lib/notifications";
-import type { NotificationRules } from "../types";
+import type { NotificationRules, RestrictedCapability } from "../types";
 import { getConfig, getConfigValue } from "../lib/config";
 import { getGithubReadmeFromCache } from "../lib/githubReadme";
 import { encryptSecret, hashSecret } from "../lib/secretCrypto";
@@ -174,6 +187,13 @@ app.patch("/me", async (c) => {
     values.push(body.refresh_token_ttl_days);
   }
   if (body.profile_is_public !== undefined) {
+    // Turning a profile public adds a rendered, crawlable page plus image
+    // proxying — a per-account cost the restricted tier exists to avoid.
+    // Turning it *off* is always allowed.
+    if (body.profile_is_public) {
+      const capErr = await guardCapability(c.env.DB, user.id, "profile:public");
+      if (capErr) return c.json({ error: capErr }, 403);
+    }
     updates.push("profile_is_public = ?");
     values.push(body.profile_is_public ? 1 : 0);
   }
@@ -610,6 +630,19 @@ app.delete("/me", async (c) => {
     if (!ok) return c.json({ error: "Invalid password" }, 401);
   }
 
+  // Before the delete — the membership rows this reads go with the user.
+  await recordAccountDeletion(
+    c.env,
+    c.executionCtx,
+    { id: row.id, username: row.username },
+    {
+      actorId: row.id,
+      actorName: row.username,
+      cause: "self",
+      ...auditRequestMeta(c),
+    },
+  );
+
   await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
   // Avatar + every README image just lost their owning row — sweep so
   // those URLs stop being servable instead of waiting for the next cron.
@@ -847,23 +880,31 @@ app.post("/me/emails/:id/set-primary", async (c) => {
 
   // Swap: move current primary to user_emails, promote alternate to users.email
   const oldPrimaryId = randomId();
+  // A synthesised placeholder is not an address anyone can reach, so it is
+  // dropped rather than demoted — keeping it would leave an unreachable
+  // `@users.invalid` row sitting in the account's email list forever.
+  const demoteOldPrimary = !isSyntheticEmail(userRow.email);
   await c.env.DB.batch([
     // Insert old primary as alternate. Carry the verification *state* but
     // explicitly drop the verify_token / verify_code — those are tied to a
     // specific outstanding inbound-mail challenge against the old primary
     // address; reusing them on a new alternate row would let a user replay
     // a code they already learned to flip a different address to verified.
-    c.env.DB.prepare(
-      "INSERT INTO user_emails (id, user_id, email, verified, verify_token, verify_code, verified_via, verified_at, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
-    ).bind(
-      oldPrimaryId,
-      user.id,
-      userRow.email,
-      userRow.email_verified,
-      userRow.email_verified_via,
-      userRow.email_verified_at,
-      now,
-    ),
+    ...(demoteOldPrimary
+      ? [
+          c.env.DB.prepare(
+            "INSERT INTO user_emails (id, user_id, email, verified, verify_token, verify_code, verified_via, verified_at, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
+          ).bind(
+            oldPrimaryId,
+            user.id,
+            userRow.email,
+            userRow.email_verified,
+            userRow.email_verified_via,
+            userRow.email_verified_at,
+            now,
+          ),
+        ]
+      : []),
     // Update users table with new primary
     c.env.DB.prepare(
       "UPDATE users SET email = ?, email_verified = ?, email_verified_via = ?, email_verified_at = ?, email_verify_token = NULL, email_verify_code = NULL, updated_at = ? WHERE id = ?",
@@ -880,6 +921,154 @@ app.post("/me/emails/:id/set-primary", async (c) => {
   ]);
 
   return c.json({ message: "Primary email updated" });
+});
+
+// ─── Lifting the invite-registration restriction ─────────────────────────────
+
+// GET /api/user/me/restriction — what the Security tab needs to render the
+// conversion control (or explain why it isn't available).
+app.get("/me/restriction", async (c) => {
+  const user = c.get("user");
+  const row = await c.env.DB.prepare(
+    "SELECT email, email_verified, origin_team_id, origin_join_completed, converted_at FROM users WHERE id = ?",
+  )
+    .bind(user.id)
+    .first<{
+      email: string;
+      email_verified: number;
+      origin_team_id: string | null;
+      origin_join_completed: number;
+      converted_at: number | null;
+    }>();
+  if (!row) return c.json({ error: "User not found" }, 404);
+
+  if (!isRestricted(row)) {
+    return c.json({
+      restricted: false,
+      converted_at: row.converted_at,
+    });
+  }
+
+  const grants = await getRestrictedCapabilities(c.env.DB);
+  const config = await getConfig(c.env.DB);
+  const team = row.origin_team_id
+    ? await c.env.DB.prepare("SELECT id, name FROM teams WHERE id = ?")
+        .bind(row.origin_team_id)
+        .first<{ id: string; name: string }>()
+    : null;
+
+  const needsEmail =
+    isSyntheticEmail(row.email) ||
+    (config.require_email_verification && row.email_verified !== 1);
+
+  return c.json({
+    restricted: true,
+    pending_join: isPendingJoin(row),
+    origin_team: team,
+    capabilities: Object.fromEntries(
+      (
+        Object.keys(RESTRICTED_CAPABILITY_DEFAULTS) as RestrictedCapability[]
+      ).map((k) => [k, resolveRestrictedCapability(k, grants)]),
+    ),
+    conversion: {
+      available: resolveRestrictedCapability("self:convert", grants),
+      needs_real_email: needsEmail,
+      synthetic_email: isSyntheticEmail(row.email),
+    },
+  });
+});
+
+// POST /api/user/me/convert — become an ordinary account.
+//
+// One-way on purpose: "unlocks everything" has no meaningful inverse, and a
+// reversible switch would just be another thing to reason about in the
+// dissolution and re-parenting checks.
+app.post("/me/convert", async (c) => {
+  const user = c.get("user");
+  const row = await c.env.DB.prepare(
+    "SELECT id, username, email, email_verified, origin_team_id, origin_join_completed, converted_at FROM users WHERE id = ?",
+  )
+    .bind(user.id)
+    .first<{
+      id: string;
+      username: string;
+      email: string;
+      email_verified: number;
+      origin_team_id: string | null;
+      origin_join_completed: number;
+      converted_at: number | null;
+    }>();
+  if (!row) return c.json({ error: "User not found" }, 404);
+
+  if (!isRestricted(row))
+    return c.json({ error: "This account is not restricted" }, 400);
+  if (isPendingJoin(row))
+    return c.json({ error: "Finish joining your team before converting" }, 403);
+
+  const grants = await getRestrictedCapabilities(c.env.DB);
+  if (!resolveRestrictedCapability("self:convert", grants))
+    return c.json(
+      { error: "Converting to a full account is not enabled on this instance" },
+      403,
+    );
+
+  // The invite path may have skipped email verification to spare the instance
+  // a mail send per registration. That deferral ends here: an account about
+  // to gain every ordinary feature must first be reachable, and must satisfy
+  // whatever the site requires of an ordinary account.
+  const config = await getConfig(c.env.DB);
+  if (isSyntheticEmail(row.email))
+    return c.json(
+      {
+        error:
+          "Add and verify a real email address before converting this account",
+      },
+      403,
+    );
+  if (config.require_email_verification && row.email_verified !== 1)
+    return c.json(
+      { error: "Verify your email address before converting this account" },
+      403,
+    );
+
+  const now = Math.floor(Date.now() / 1000);
+  // origin_team_id is deliberately left in place. It stops constraining
+  // anything the moment converted_at is set, but a leaked invite still needs
+  // to be traceable to the accounts it produced.
+  await c.env.DB.prepare(
+    "UPDATE users SET converted_at = ?, updated_at = ? WHERE id = ? AND converted_at IS NULL",
+  )
+    .bind(now, now, user.id)
+    .run();
+
+  const auditMeta = auditRequestMeta(c);
+  await recordAudit(c.env, c.executionCtx, [
+    {
+      scope: "user",
+      scopeId: user.id,
+      action: "user.restriction.converted",
+      actorId: user.id,
+      actorName: row.username,
+      metadata: { origin_team_id: row.origin_team_id },
+      ...auditMeta,
+    },
+    // The origin team loses a restricted member — worth surfacing there too,
+    // since dissolution will no longer take this account with it.
+    {
+      scope: "team",
+      scopeId: row.origin_team_id,
+      action: "team.member.restriction_lifted",
+      actorId: user.id,
+      actorName: row.username,
+      resourceType: "user",
+      resourceId: user.id,
+      resourceName: `@${row.username}`,
+      metadata: {},
+      ...auditMeta,
+    },
+  ]);
+
+  return c.json({ message: "Account converted", converted_at: now });
 });
 
 // DELETE /api/user/me/emails/:id — remove an alternate email
@@ -959,6 +1148,10 @@ app.get("/tokens", async (c) => {
 // POST /api/user/tokens — create a PAT
 app.post("/tokens", async (c) => {
   const user = c.get("user");
+
+  const capErr = await guardCapability(c.env.DB, user.id, "pat:create");
+  if (capErr) return c.json({ error: capErr }, 403);
+
   const body = await c.req.json<{
     name: string;
     scopes: string[];

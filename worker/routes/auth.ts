@@ -87,7 +87,10 @@ async function logLoginError(
 type AppEnv = { Bindings: Env; Variables: Variables };
 const app = new Hono<AppEnv>();
 
-async function issueSession(
+/** Exported so the invite-registration flow can mint a session through the
+ *  same path as ordinary login rather than re-implementing cookie handling,
+ *  JWT signing and session-row bookkeeping. */
+export async function issueSession(
   c: Context<AppEnv>,
   user: UserRow,
   ttlSeconds: number,
@@ -1581,7 +1584,9 @@ app.post("/gpg-login", async (c) => {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function safeUser(
+/** Exported for the invite-registration flow, which needs to hand the client
+ *  the same profile shape ordinary registration returns. */
+export async function safeUser(
   baseUrl: string,
   db: D1Database,
   user: UserRow,

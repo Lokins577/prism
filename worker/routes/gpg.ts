@@ -1,5 +1,6 @@
 // GPG key management routes (authenticated)
 
+import { guardCapability } from "../lib/userCapabilities";
 import { Hono } from "hono";
 import { requireAuth } from "../middleware/auth";
 import { randomId } from "../lib/crypto";
@@ -30,6 +31,10 @@ app.get("/", async (c) => {
 
 app.post("/", async (c) => {
   const user = c.get("user");
+
+  const capErr = await guardCapability(c.env.DB, user.id, "gpg:manage");
+  if (capErr) return c.json({ error: capErr }, 403);
+
   const body = await c.req.json<{ public_key: string; name?: string }>();
 
   if (!body.public_key || typeof body.public_key !== "string") {

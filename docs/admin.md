@@ -300,6 +300,36 @@ hidden and the API returns a 403. See [Configuration → Wrangler bindings & var
 `disable_user_create_team` hides the "New team" button from non-admins. With it
 on, only admins can create teams (existing teams keep working).
 
+## Invite-link registration
+
+**Admin → Teams** carries two extra controls once
+`enable_team_invite_registration` is on.
+
+**Authorise / revoke** — grants a team permission to hand out account-creating
+invite links. This is the second of two doors; without it the team owner's own
+switch does nothing. Revoking also closes that switch, so the channel shuts
+immediately rather than reopening if the grant is later restored.
+
+Exemptions are set through the same endpoint. Only email verification can be
+exempted, and only by an administrator — it is the one check whose cost scales
+with the number of registrations. Captcha, proof-of-work and every rate limit
+are never exemptible.
+
+**Dissolve (staged)** — dissolving a team that minted accounts deletes those
+accounts, so it does not go through the ordinary delete button (which returns
+409 for such teams). Stage one deactivates every affected account in a single
+statement, however many there are. Stage two deletes them in batches after
+`restricted_dissolve_grace_hours`, which leaves a window to cancel.
+
+Only accounts whose origin is that team are deleted. Members who joined with
+their own Prism accounts, and anyone who has converted, are untouched.
+
+`GET /api/admin/restricted-users?invite_token=…` lists the accounts a given
+link produced — the query to run when one leaks.
+
+See [Teams → Restricted accounts](teams.md#restricted-accounts) for the full
+model.
+
 ## Request Logs
 
 **Admin → Request Logs** is a paginated, filterable table of every Worker

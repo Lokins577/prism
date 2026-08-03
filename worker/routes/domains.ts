@@ -1,5 +1,6 @@
 // Domain verification routes
 
+import { guardCapability } from "../lib/userCapabilities";
 import { Hono } from "hono";
 import { randomBase64url, randomId } from "../lib/crypto";
 import { getConfigValue } from "../lib/config";
@@ -38,6 +39,10 @@ app.get("/", async (c) => {
 // Add domain
 app.post("/", async (c) => {
   const user = c.get("user");
+
+  const capErr = await guardCapability(c.env.DB, user.id, "domain:create");
+  if (capErr) return c.json({ error: capErr }, 403);
+
   const body = await c.req.json<{ domain: string; app_id?: string }>();
 
   if (!body.domain) return c.json({ error: "domain is required" }, 400);

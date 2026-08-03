@@ -287,6 +287,186 @@ assignment are dashboard-only; `team:<id>:member:write` does **not** grant them.
 Team `role_permissions` never leave the dashboard API — downstream apps see
 which labels a member holds, not how the team configured who may hand them out.
 
+## Invite-link registration
+
+Normally a team invite only admits people who already have a Prism account. A
+team the site administrator has authorised can instead hand out links that
+**create** accounts, from a standalone page at `/join/<team-id>`.
+
+Accounts made this way are **restricted**: every resource-creating feature is
+off unless the site administrator grants it. The point is to let a large,
+single-purpose population sign in without each of them also becoming able to
+create teams, applications and verified domains.
+
+::: tip What this does and doesn't save
+Restricting features saves rows and abuse surface. It does **not** reduce
+authentication traffic — a user who only ever signs in to one application
+still goes through the full `/authorize` → `/token` → refresh cycle.
+:::
+
+### Two doors
+
+The channel is closed twice over, and both must be open:
+
+1. **Site master switch** — `enable_team_invite_registration`, off by default.
+2. **Per-team grant** — given by a site administrator in **Admin → Teams**. The
+   team owner cannot grant it to themselves.
+
+Only then does the team owner's own switch, under **Settings → Invite-link
+registration**, do anything. Without the second door, turning on the first
+would make every team owner on the instance a registrar.
+
+### Creating a registration invite
+
+Tick **Usable for creating new accounts** when generating an invite. Such an
+invite:
+
+- **must have a finite usage limit**, capped by
+  `team_invite_registration_max_uses_cap`. The ordinary default of `0` means
+  _unlimited_, which is harmless for admission but would mean unbounded
+  registration here.
+- **always grants `member`**. Someone arriving through a link should never
+  begin able to manage the team.
+
+The link points at `/join/<team-id>?invite=<code>`, not the ordinary
+`/teams/join/<token>` route.
+
+### What a registrant goes through
+
+```
+/join/<team-id>  →  account created (pending)  →  requirements  →  member
+```
+
+The account exists before its requirements are met, because everything that
+satisfies a requirement — enrolling 2FA, verifying an address — needs an
+authenticated session. This mirrors what ordinary registration already does
+when the site requires email verification.
+
+While pending, the account can do nothing but manage its own security, and
+**cannot sign in to any application**. A pending account holds no membership,
+so its token would carry no `in_team_*` or `groups_in_team_*` claims — an app
+receiving one would read it as "not a member" and likely create a local record
+it then has to reconcile.
+
+Pass `?continue=<url>` (same-origin only) to send the user somewhere specific
+once they finish.
+
+Abandoned registrations are deleted after `restricted_pending_ttl_hours`.
+
+### Email
+
+If the site administrator exempts this team from email verification, the
+registration form does not ask for an address at all and the account gets a
+synthesised `@users.invalid` placeholder.
+
+That is deliberate. Storing an _unverified real_ address instead would be
+worse: `users.email` is `UNIQUE`, so one typo permanently locks the true owner
+of that address out of the instance — and the person who typed it can never
+verify it, so their own account can never be converted either.
+
+The holder can bind a real address whenever they like, and must before
+converting.
+
+### Anti-abuse
+
+Four defences, none of them exemptible:
+
+| Defence                        | Bounds                                                  |
+| ------------------------------ | ------------------------------------------------------- |
+| Per-IP rate limit              | 5 registrations per 5 minutes, as ordinary registration |
+| Captcha / proof-of-work        | Bot resistance                                          |
+| Per-invite rate limit          | `team_invite_registration_rate_per_hour` — the burst    |
+| `max_uses`, claimed atomically | **The total.** The only hard bound                      |
+
+The per-invite limit matters because per-IP limiting does nothing against a
+link shared to thousands of people who each register once from their own
+address.
+
+A seat is claimed when the account is created, not when the join completes. An
+abandoned registration burns one — accepted, because deferring the claim would
+make the check racy and would also strand people who enrolled 2FA only to be
+told the invite had filled up.
+
+## Restricted accounts
+
+### What is restricted
+
+| Capability                                    | Default       |
+| --------------------------------------------- | ------------- |
+| Create teams                                  | off           |
+| Create applications                           | off           |
+| Verify domains                                | off           |
+| Personal access tokens                        | off           |
+| Public profile                                | off           |
+| GPG keys                                      | off           |
+| Convert to a full account                     | off           |
+| Team features, and their own account security | **always on** |
+
+Site administrators lift individual capabilities through
+`restricted_user_capabilities`. Defaults deny, so a feature added later is
+automatically off for these accounts without anyone having to remember.
+
+Account security is never gated — gating it would deadlock registration, since
+a pending account has to enrol 2FA to finish joining.
+
+### Scope
+
+A restricted account is confined to its **origin team's subtree**:
+
+- it may join that team and its descendants, and no others — being _added_ by
+  an admin is not an exception;
+- it may sign in only to applications owned by that team or its descendants.
+
+The anchor is the origin team, never the account's current memberships.
+Anchoring on memberships would be self-defeating: join a second team and its
+whole subtree opens up.
+
+Application scope is checked at `/authorize` only, not on refresh — otherwise
+transferring an app out of the team would silently invalidate live tokens.
+
+### Converting to a full account
+
+Where enabled (`self:convert`), the holder converts from **Security → Account
+type**. Conversion:
+
+- unlocks every ordinary feature,
+- keeps their team membership,
+- requires a real, verified address first — the deferred email cost comes due
+  here rather than at registration, so only people who actually want the rest
+  of Prism pay it,
+- is **one-way**,
+- and takes the account out of the set a dissolution would delete.
+
+`origin_team_id` is kept afterwards for traceability but stops constraining
+anything.
+
+### Dissolution
+
+Dissolving a team that minted accounts **deletes those accounts**. Because of
+that:
+
+- only a site administrator can do it, through a staged flow;
+- all four ordinary dissolution routes refuse — owner delete, last-member
+  leave, the OAuth `teams:delete` scope, and the plain admin delete;
+- only accounts whose `origin_team_id` is that team are deleted. Members who
+  joined with their own Prism accounts, and anyone who converted, are
+  untouched;
+- stage one deactivates every affected account at once; stage two deletes them
+  in batches after `restricted_dissolve_grace_hours`, leaving a window to
+  cancel.
+
+The registration page states this before anyone signs up.
+
+::: warning Protection is keyed on accounts, not on the switch
+A team is protected while it still has live restricted accounts — _not_ while
+its invite registration switch is on. Otherwise the switch could be turned off
+and the team dissolved by its owner with thousands of accounts still anchored
+to it. Protection lapses by itself once those accounts are gone.
+:::
+
+A team containing restricted members also cannot be moved out of its origin
+team's subtree, and ownership cannot be transferred to a restricted account.
+
 ## Team-owned apps and domains
 
 OAuth apps can be created directly under a team (**Teams → \<team\> → Apps → New**)

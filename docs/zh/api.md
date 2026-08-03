@@ -345,6 +345,26 @@ description: Prism REST API — 认证、OAuth、应用、团队、域名、GPG�
 | `POST`                    | `/api/teams/:id/apps/transfer`                       | 把个人应用转入团队                                                                                                                                                                                                         |
 | `DELETE`                  | `/api/teams/:id/apps/:appId/transfer`                | 把团队应用转回原所有者                                                                                                                                                                                                     |
 
+## 邀请链接注册
+
+语义详见 [团队 → 邀请链接注册](teams.md#邀请链接注册)。
+
+| 方法    | 路径                                       | 说明                                                                      |
+| ------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| `GET`   | `/api/join/:teamId`                        | 未认证。团队品牌信息、生效门槛、captcha 配置。通道关闭时返回 404          |
+| `POST`  | `/api/auth/register-with-invite`           | 创建 pending 账号并返回会话，原子占用一个邀请名额                         |
+| `GET`   | `/api/auth/invite-join/status`             | 该 pending 账号还差哪些门槛                                               |
+| `POST`  | `/api/auth/invite-join/complete`           | 门槛满足后写入成员行，始终以 `member` 身份加入                            |
+| `GET`   | `/api/user/me/restriction`                 | 调用者是否受限、拥有哪些能力、能否转换                                    |
+| `POST`  | `/api/user/me/convert`                     | 解除受限。单向不可逆，需已绑定并验证真实邮箱                              |
+| `PATCH` | `/api/admin/teams/:id/invite-registration` | 站点管理员：授予/撤销，并设置豁免项（仅 `email_verification`）            |
+| `POST`  | `/api/admin/teams/:id/dissolve`            | 站点管理员：阶段一，停用该团队的账号。需输入团队名确认                    |
+| `POST`  | `/api/admin/teams/:id/dissolve/cancel`     | 宽限期内撤销分段解散                                                      |
+| `GET`   | `/api/admin/restricted-users`              | 按 `?team_id=` 或 `?invite_token=` 反查产生的账号 —— 邀请码泄漏时用于定损 |
+
+`POST /api/teams/:id/invites` 额外接受 `allows_registration`，它要求 `max_uses` 为有限值且不超过站点上限，并强制角色为 `member`。
+`PATCH /api/teams/:id` 接受 `invite_registration_enabled`（仅 owner，且需已获授权）与 `allow_normal_user_join`。
+
 ## 域名
 
 | Method   | Path                      | 说明                                                                                               |

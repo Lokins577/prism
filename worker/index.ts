@@ -20,6 +20,11 @@ import wellknownRoutes from "./routes/wellknown";
 import publicRoutes from "./routes/public";
 import initRoutes from "./routes/init";
 import authRoutes from "./routes/auth";
+import inviteRegistrationRoutes from "./routes/invite-registration";
+import {
+  reapDissolvedTeams,
+  reapPendingRegistrations,
+} from "./cron/restricted";
 import oauthRoutes from "./routes/oauth";
 import appsRoutes from "./routes/apps";
 import teamsRoutes from "./routes/teams";
@@ -63,6 +68,10 @@ app.use(
 );
 
 app.route("/api", siteRoutes);
+// Mounted at /api because it spans two prefixes: the unauthenticated
+// /api/join/:teamId page data and the /api/auth/invite-join/* completion
+// steps. Registered before authRoutes so neither shadows the other.
+app.route("/api", inviteRegistrationRoutes);
 app.route("/api/assets", assetsRoutes);
 app.route("/api/init", initRoutes);
 app.route("/api/auth", authRoutes);
@@ -108,6 +117,11 @@ export default {
     ctx.waitUntil(purgeAppEventQueue(env.DB).catch(() => {}));
     ctx.waitUntil(sweepExpiredPowUsed(env.DB).catch(() => {}));
     ctx.waitUntil(sweepOrphanedImageProxyMappings(env.DB).catch(() => {}));
+    // Both of these do a bounded slice per tick and pick up where they left
+    // off — a team with thousands of invite-registered accounts is cleared
+    // over several runs rather than one request that would never finish.
+    ctx.waitUntil(reapPendingRegistrations(env, ctx).catch(() => {}));
+    ctx.waitUntil(reapDissolvedTeams(env, ctx).catch(() => {}));
   },
 
   email: handleEmailWorker,

@@ -105,6 +105,17 @@ const DEFAULT_CONFIG: SiteConfig = {
   // operators who want a different posture site-wide set it here instead of
   // editing each team.
   default_team_role_permissions: {},
+  // Team-invite registration. Off by default because switching it on is what
+  // lets team owners mint accounts — a power that otherwise belongs solely to
+  // the site admin. Each team additionally needs its own grant.
+  enable_team_invite_registration: false,
+  team_invite_registration_max_uses_cap: 1000,
+  team_invite_registration_rate_per_hour: 200,
+  // Empty = restricted accounts fall through to the built-in defaults, which
+  // deny every resource-creating feature.
+  restricted_user_capabilities: {},
+  restricted_pending_ttl_hours: 72,
+  restricted_dissolve_grace_hours: 168,
   initialized: false,
 };
 

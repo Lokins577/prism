@@ -106,6 +106,16 @@ export function createRoutes(ctx: RouteContext): RouteObject[] {
       lazy: () =>
         import("./pages/Register").then((m) => ({ Component: m.Register })),
     },
+    {
+      // Standalone, team-branded registration entry. Deliberately not behind
+      // publicAuthLoader: an already-signed-in visitor should still be able
+      // to read the page and be pointed at the ordinary join flow.
+      path: "/join/:teamId",
+      lazy: () =>
+        import("./pages/JoinRegister").then((m) => ({
+          Component: m.JoinRegister,
+        })),
+    },
     { path: "/auth/callback", element: <AuthCallback /> },
     {
       path: "/auth/tg-callback",
