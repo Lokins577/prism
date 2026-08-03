@@ -778,7 +778,7 @@
     "allowNormalJoin": "允许已有 Prism 账号的人通过邀请链接加入",
     "allowNormalJoinHint": "管理员始终可以直接添加已有账号 —— 此项只影响邀请链接。",
     "inviteAllowsRegistration": "可用于创建新账号",
-    "inviteAllowsRegistrationHint": "必须设置使用次数上限。任何拿到此链接的人都能在本团队创建账号。"
+    "inviteAllowsRegistrationHint": "必须设置使用次数上限。任何拿到此链接的人都能在本团队创建账号。",
     "searchMembersPlaceholder": "搜索成员",
     "filterByGroup": "按身份组筛选",
     "allGroups": "全部身份组",
