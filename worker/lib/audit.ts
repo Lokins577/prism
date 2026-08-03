@@ -108,6 +108,81 @@ export async function recordAudit(
   }
 }
 
+// ─── Account deletion ────────────────────────────────────────────────────────
+
+/**
+ * Announce that an account is going away, to every team that will notice.
+ *
+ * Deletion previously emitted at most a platform-scope event, and only from
+ * the admin panel — self-deletion and the OAuth `site:user:delete` path were
+ * silent. Platform scope alone does not reach team owners, because webhook
+ * delivery matches on (scope, scope_id): a team subscribing to its own log
+ * would never learn that one of its members had vanished, leaving downstream
+ * apps holding a subject id that resolves to nothing.
+ *
+ * So this fans out one `team.member.account_deleted` per team the user
+ * belongs to, alongside the platform-scope record. Apps that already
+ * subscribe to their team's audit webhook for membership changes pick it up
+ * with no extra wiring.
+ *
+ * MUST be called *before* the row is deleted — the membership rows it reads
+ * are cascade-deleted along with the user.
+ */
+export async function recordAccountDeletion(
+  env: Env,
+  ctx: ExecutionContext | { waitUntil: (p: Promise<unknown>) => void },
+  user: { id: string; username: string },
+  opts: {
+    /** Who performed it: the user themselves, an admin, or the reaper. */
+    actorId?: string | null;
+    actorName?: string | null;
+    /** `self`, `admin`, or `team_dissolved`. */
+    cause: "self" | "admin" | "team_dissolved";
+    ip?: string | null;
+    userAgent?: string | null;
+  },
+): Promise<void> {
+  let teamIds: string[] = [];
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT team_id FROM team_members WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .all<{ team_id: string }>();
+    teamIds = results.map((r) => r.team_id);
+  } catch {
+    // A failed lookup must not block the deletion it is describing.
+  }
+
+  const base = {
+    actorId: opts.actorId ?? null,
+    actorName: opts.actorName ?? null,
+    resourceType: "user",
+    resourceId: user.id,
+    resourceName: `@${user.username}`,
+    ip: opts.ip ?? null,
+    userAgent: opts.userAgent ?? null,
+    metadata: { cause: opts.cause },
+  };
+
+  const inputs: AuditInput[] = [
+    {
+      scope: "platform",
+      scopeId: null,
+      action: "user.account.deleted",
+      ...base,
+    },
+    ...teamIds.map((teamId) => ({
+      scope: "team" as const,
+      scopeId: teamId,
+      action: "team.member.account_deleted",
+      ...base,
+    })),
+  ];
+
+  await recordAudit(env, ctx, inputs);
+}
+
 // ─── Metadata extraction from the request ────────────────────────────────────
 
 export function auditRequestMeta(c: {

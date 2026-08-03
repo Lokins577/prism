@@ -1,5 +1,6 @@
 // OAuth application management (CRUD for user-owned apps)
 
+import { guardCapability } from "../lib/userCapabilities";
 import { Hono, type Context, type Next } from "hono";
 import { randomId, randomBase64url } from "../lib/crypto";
 import { parseBasicAuth } from "../lib/basicAuth";
@@ -303,6 +304,9 @@ app.post("/", async (c) => {
     const disabled = await getConfigValue(c.env.DB, "disable_user_create_app");
     if (disabled) return c.json({ error: "App creation is disabled" }, 403);
   }
+
+  const capErr = await guardCapability(c.env.DB, user.id, "app:create");
+  if (capErr) return c.json({ error: capErr }, 403);
 
   const body = await c.req.json<{
     name: string;

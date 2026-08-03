@@ -1,5 +1,7 @@
 // Security page: TOTP, Passkeys, Sessions
 
+import { AccountRestrictionPanel } from "../components/AccountRestrictionPanel";
+
 import {
   Badge,
   Button,
@@ -1359,6 +1361,9 @@ export function Security() {
           </Button>
         </div>
       </div>
+
+      {/* Renders nothing for ordinary accounts. */}
+      <AccountRestrictionPanel />
     </div>
   );
 }

@@ -41,12 +41,22 @@ import {
 } from "../lib/scopes";
 import { deliverAppEvent } from "../lib/app-events";
 import {
+  checkAppAuthorizationAllowed,
+  getRestrictionState,
+  hasLiveRestrictedAccounts,
+} from "../lib/userCapabilities";
+import {
   getGroupsForTeamMembers,
   getGroupsForUserByTeam,
   getMemberGroups,
   sanitizeRolePermissions,
 } from "../lib/teamGroups";
-import { recordAudit, auditRequestMeta, type AuditInput } from "../lib/audit";
+import {
+  recordAudit,
+  recordAccountDeletion,
+  auditRequestMeta,
+  type AuditInput,
+} from "../lib/audit";
 import {
   getMember,
   getEffectiveMember,
@@ -861,6 +871,21 @@ app.post("/authorize", requireAuth, async (c) => {
     .bind(body.client_id)
     .first<OAuthAppRow>();
   if (!oauthApp) return c.json({ error: "invalid_client" }, 400);
+
+  // Restricted accounts sign in only to their own team's applications, and
+  // not at all until they have finished joining — a pending account would
+  // otherwise hand the app a token with no membership or group claims, which
+  // reads as "not a member" and invites a local record the app then has to
+  // reconcile.
+  const restriction = await getRestrictionState(c.env.DB, user.id);
+  if (restriction) {
+    const appErr = await checkAppAuthorizationAllowed(
+      c.env.DB,
+      restriction,
+      oauthApp,
+    );
+    if (appErr) return c.json({ error: "access_denied", message: appErr }, 403);
+  }
 
   const redirectUris = parseRedirectUris(oauthApp.redirect_uris);
   if (!redirectUriMatchesRegistered(body.redirect_uri, redirectUris))
@@ -2653,6 +2678,18 @@ app.delete("/me/teams/:id", async (c) => {
   if (!effective || effective.role !== "owner")
     return c.json({ error: "Only the team owner can delete the team" }, 403);
 
+  // Same site-admin-only protection as the dashboard paths. Easiest of the
+  // four to overlook and the most dangerous to miss: an authorized app can
+  // reach this with no human present at all.
+  if (await hasLiveRestrictedAccounts(c.env.DB, teamId))
+    return c.json(
+      {
+        error:
+          "This team has accounts registered through its invite links. Only a site administrator can dissolve it.",
+      },
+      403,
+    );
+
   // Recursive cascade — reassigns team-owned apps per level before deletion.
   await dissolveTeam(c.env.DB, teamId, resolved.userId);
 
@@ -3466,10 +3503,25 @@ app.delete("/me/admin/users/:id", async (c) => {
       403,
     );
 
-  const target = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?")
+  const target = await c.env.DB.prepare(
+    "SELECT id, username FROM users WHERE id = ?",
+  )
     .bind(targetId)
-    .first();
+    .first<{ id: string; username: string }>();
   if (!target) return c.json({ error: "User not found" }, 404);
+
+  // This path emitted nothing at all before. Fan out before the delete so
+  // the teams the user belonged to are still readable.
+  await recordAccountDeletion(
+    c.env,
+    c.executionCtx,
+    { id: target.id, username: target.username },
+    {
+      actorId: resolved.userId,
+      cause: "admin",
+      ...auditRequestMeta(c),
+    },
+  );
 
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(targetId),

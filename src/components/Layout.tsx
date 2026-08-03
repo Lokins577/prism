@@ -239,6 +239,24 @@ export function Layout() {
     staleTime: 60_000,
   });
 
+  // Restricted accounts have most developer features denied server-side.
+  // Resolves to "unrestricted" for everyone else, so the nav is unchanged
+  // for the overwhelming majority.
+  const { data: restriction } = useQuery({
+    queryKey: ["my-restriction"],
+    queryFn: api.myRestriction,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const restrictedCaps = restriction?.restricted
+    ? restriction.capabilities
+    : null;
+  const showDeveloperNav =
+    !restrictedCaps ||
+    restrictedCaps["app:create"] ||
+    restrictedCaps["domain:create"] ||
+    restrictedCaps["pat:create"];
+
   const handleLogout = async () => {
     try {
       await api.logout();
@@ -323,31 +341,43 @@ export function Layout() {
           onNavigate={closeSidebar}
         />
 
-        <div className={styles.navSection}>{t("nav.developer")}</div>
-        <NavItem
-          to="/apps"
-          icon={<AppsRegular />}
-          label={t("nav.myApps")}
-          onNavigate={closeSidebar}
-        />
+        {/* Hidden for restricted accounts, whose server-side capability set
+            denies all of these. Hiding is presentation only — the refusal
+            lives in the API, this just avoids offering dead ends. Teams stays
+            visible because a restricted account still belongs to one. */}
+        {(showDeveloperNav || restrictedCaps?.["team:create"]) && (
+          <div className={styles.navSection}>{t("nav.developer")}</div>
+        )}
+        {showDeveloperNav && (
+          <NavItem
+            to="/apps"
+            icon={<AppsRegular />}
+            label={t("nav.myApps")}
+            onNavigate={closeSidebar}
+          />
+        )}
         <NavItem
           to="/teams"
           icon={<PeopleRegular />}
           label={t("nav.teams")}
           onNavigate={closeSidebar}
         />
-        <NavItem
-          to="/domains"
-          icon={<GlobeRegular />}
-          label={t("nav.domains")}
-          onNavigate={closeSidebar}
-        />
-        <NavItem
-          to="/tokens"
-          icon={<KeyRegular />}
-          label={t("nav.tokens")}
-          onNavigate={closeSidebar}
-        />
+        {showDeveloperNav && (
+          <NavItem
+            to="/domains"
+            icon={<GlobeRegular />}
+            label={t("nav.domains")}
+            onNavigate={closeSidebar}
+          />
+        )}
+        {showDeveloperNav && (
+          <NavItem
+            to="/tokens"
+            icon={<KeyRegular />}
+            label={t("nav.tokens")}
+            onNavigate={closeSidebar}
+          />
+        )}
 
         <div className={styles.navSection}>{t("nav.connections")}</div>
         <NavItem

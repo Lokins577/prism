@@ -11,6 +11,7 @@ import {
   Input,
   Select,
   Spinner,
+  Checkbox,
   Text,
   Tooltip,
   tokens,
@@ -28,10 +29,18 @@ import { api, ApiError } from "../../../lib/api";
 
 interface InviteDialogProps {
   teamId: string;
+  /** True when this team may hand out links that create accounts. Hides the
+   *  option entirely when it can't, rather than showing a control that
+   *  always errors. */
+  canRegister?: boolean;
   showMsg: (type: "success" | "error", text: string) => void;
 }
 
-export function InviteDialog({ teamId, showMsg }: InviteDialogProps) {
+export function InviteDialog({
+  teamId,
+  canRegister,
+  showMsg,
+}: InviteDialogProps) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -41,12 +50,14 @@ export function InviteDialog({ teamId, showMsg }: InviteDialogProps) {
     max_uses: "",
     ttl_hours: "72",
   });
+  const [allowsRegistration, setAllowsRegistration] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const resetState = () => {
     setForm({ role: "member", email: "", max_uses: "", ttl_hours: "72" });
+    setAllowsRegistration(false);
     setCreatedLink(null);
     setCopied(false);
     setCreating(false);
@@ -65,6 +76,7 @@ export function InviteDialog({ teamId, showMsg }: InviteDialogProps) {
         email: form.email.trim() || undefined,
         max_uses: form.max_uses ? parseInt(form.max_uses) : undefined,
         ttl_hours: form.ttl_hours ? parseInt(form.ttl_hours) : undefined,
+        allows_registration: allowsRegistration || undefined,
       });
       await qc.invalidateQueries({ queryKey: ["team-invites", teamId] });
 
@@ -73,7 +85,9 @@ export function InviteDialog({ teamId, showMsg }: InviteDialogProps) {
         resetState();
         showMsg("success", t("teams.inviteEmailSent"));
       } else {
-        const link = `${window.location.origin}/teams/join/${res.invite.token}`;
+        const link = allowsRegistration
+          ? `${window.location.origin}/join/${teamId}?invite=${res.invite.token}`
+          : `${window.location.origin}/teams/join/${res.invite.token}`;
         setCreatedLink(link);
       }
     } catch (err) {
@@ -183,6 +197,21 @@ export function InviteDialog({ teamId, showMsg }: InviteDialogProps) {
                     contentBefore={<MailRegular />}
                   />
                 </Field>
+                {canRegister && (
+                  <Checkbox
+                    checked={allowsRegistration}
+                    onChange={(_, d) => setAllowsRegistration(!!d.checked)}
+                    label={t("teams.inviteAllowsRegistration")}
+                  />
+                )}
+                {allowsRegistration && (
+                  <Text
+                    size={200}
+                    style={{ color: tokens.colorNeutralForeground3 }}
+                  >
+                    {t("teams.inviteAllowsRegistrationHint")}
+                  </Text>
+                )}
                 <Field label={t("teams.maxUses")} hint={t("teams.maxUsesHint")}>
                   <Input
                     type="number"

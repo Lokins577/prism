@@ -51,6 +51,22 @@ export interface UserRow {
   /** Consecutive 401 ("Bad credentials") count for the per-user PAT.
    *  Auto-cleared at 3; reset on success or rotation. */
   github_readme_token_failures: number;
+  /** Team whose invite minted this account. Non-null = restricted account:
+   *  resource-creating features are off by default, app authorization and
+   *  team membership are confined to this team's subtree. */
+  origin_team_id: string | null;
+  /** Hashed reference to the invite used, for tracing a leaked link back to
+   *  the accounts it created. */
+  origin_invite_token: string | null;
+  /** 0 while the account exists but has not yet satisfied the team's join
+   *  requirements. Pending accounts cannot complete an OAuth authorization
+   *  and are reaped if abandoned. */
+  origin_join_completed: number;
+  /** When the holder converted to an unrestricted account; NULL = still
+   *  restricted. `origin_team_id` is kept for traceability but stops
+   *  constraining anything — notably, converted accounts are excluded from
+   *  the set a team dissolution deletes. */
+  converted_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -159,8 +175,35 @@ export interface TeamRow {
    *  Owner-only to change — a capability set that the roles it constrains
    *  could edit would be no constraint at all. */
   role_permissions: string | null;
+  /** 1 = a site admin has authorised this team to mint accounts through
+   *  invite links. Team owners cannot set this; it is the second of the two
+   *  doors guarding the channel. */
+  invite_registration_granted: number;
+  /** The team owner's own switch. Only meaningful while granted = 1. */
+  invite_registration_enabled: number;
+  /** JSON {@link InviteRegistrationExemptions} — site-level registration
+   *  requirements this team's invite path may skip. Site-admin controlled.
+   *  NULL = nothing exempted. Captcha, proof-of-work and rate limits are
+   *  never exemptible and have no representation here. */
+  invite_registration_exemptions: string | null;
+  /** 0 = a normal (unrestricted) account may not join via invite link.
+   *  Direct adds by an admin bypass this, so hiring staff still works. */
+  allow_normal_user_join: number;
+  /** Set when a site admin begins the staged dissolution. The row survives
+   *  until the reaper finishes clearing accounts — deleting it earlier would
+   *  leave origin_team_id dangling with no way to find the work. */
+  dissolving_at: number | null;
   created_at: number;
   updated_at: number;
+}
+
+/** Site-level registration requirements a team's invite path may skip.
+ *  Deliberately narrow: only the checks whose cost scales with the number of
+ *  registrations (outbound email) are listed. */
+export interface InviteRegistrationExemptions {
+  /** Skip the site's `require_email_verification` gate, and the
+   *  `default_team_require_verified_email` floor, for this path only. */
+  email_verification?: boolean;
 }
 
 export interface TeamGroupRow {
@@ -608,8 +651,47 @@ export interface SiteConfig {
    *  shift the default posture for every team that hasn't customised it.
    *  Keys absent here fall through to the built-ins. */
   default_team_role_permissions: TeamRolePermissions;
+  /** Master switch for the team-invite registration channel. Off by default:
+   *  turning it on is what makes team owners able to mint accounts at all,
+   *  and even then each team still needs its own site-admin grant. */
+  enable_team_invite_registration: boolean;
+  /** Ceiling on the `max_uses` a team may set on a registration-capable
+   *  invite. Without it a team owner could type a million and walk straight
+   *  past the only hard bound on registration volume. */
+  team_invite_registration_max_uses_cap: number;
+  /** Per-invite registration ceiling per hour. IP rate limiting does not
+   *  bound a link shared to thousands of people; this does. */
+  team_invite_registration_rate_per_hour: number;
+  /** Capabilities granted to restricted accounts, over the built-in
+   *  defaults in worker/lib/userCapabilities.ts (which deny everything but
+   *  account security). Keys absent here fall through to those defaults. */
+  restricted_user_capabilities: RestrictedCapabilities;
+  /** How long a pending registration may sit unfinished before the reaper
+   *  deletes it, freeing the username and any bound email. */
+  restricted_pending_ttl_hours: number;
+  /** Grace period between a team dissolution deactivating its restricted
+   *  accounts and the reaper hard-deleting them. */
+  restricted_dissolve_grace_hours: number;
   initialized: boolean;
 }
+
+/** Capability overrides for restricted accounts. Only explicitly-set keys
+ *  are present; anything missing falls through to the built-in defaults. */
+export type RestrictedCapabilities = Partial<
+  Record<RestrictedCapability, boolean>
+>;
+
+/** What a restricted account may do beyond the always-on baseline (account
+ *  security and the team it belongs to). Extend the union to add more; the
+ *  storage is a JSON blob, so no migration is needed. */
+export type RestrictedCapability =
+  | "team:create"
+  | "app:create"
+  | "domain:create"
+  | "pat:create"
+  | "profile:public"
+  | "gpg:manage"
+  | "self:convert";
 
 /** Capability overrides for non-owner roles within a team, keyed by role.
  *  Only explicitly-set keys are present; anything missing falls through to

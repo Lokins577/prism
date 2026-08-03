@@ -13,6 +13,7 @@ import {
   Field,
   Input,
   MessageBar,
+  Tooltip,
   Table,
   TableBody,
   TableCell,
@@ -23,7 +24,12 @@ import {
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import { DeleteRegular, EditRegular } from "@fluentui/react-icons";
+import {
+  DeleteRegular,
+  DismissCircleRegular,
+  EditRegular,
+  PersonAddRegular,
+} from "@fluentui/react-icons";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -56,6 +62,55 @@ export function AdminTeams() {
     queryKey: ["admin-teams", page],
     queryFn: () => api.adminListTeams(page),
   });
+
+  // Granting is the second of the two doors guarding account minting: the
+  // site master switch opens the feature, this authorises one team to use it.
+  const [busyTeam, setBusyTeam] = useState<string | null>(null);
+  const [dissolving, setDissolving] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [dissolveConfirm, setDissolveConfirm] = useState("");
+
+  const handleToggleGrant = async (id: string, granted: boolean) => {
+    setBusyTeam(id);
+    try {
+      await api.adminSetInviteRegistration(id, { granted });
+      await qc.invalidateQueries({ queryKey: ["admin-teams"] });
+    } catch (err) {
+      showMsg?.(
+        "error",
+        err instanceof ApiError ? err.message : "Failed to update",
+      );
+    } finally {
+      setBusyTeam(null);
+    }
+  };
+
+  const handleStartDissolve = async () => {
+    if (!dissolving) return;
+    setBusyTeam(dissolving.id);
+    try {
+      const res = await api.adminStartDissolve(
+        dissolving.id,
+        dissolveConfirm.trim(),
+      );
+      await qc.invalidateQueries({ queryKey: ["admin-teams"] });
+      setDissolving(null);
+      setDissolveConfirm("");
+      showMsg?.(
+        "success",
+        `Dissolution started — ${res.deactivated_accounts} account(s) deactivated`,
+      );
+    } catch (err) {
+      showMsg?.(
+        "error",
+        err instanceof ApiError ? err.message : "Failed to start dissolution",
+      );
+    } finally {
+      setBusyTeam(null);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     try {
@@ -142,6 +197,50 @@ export function AdminTeams() {
                       }}
                     >
                       <CopyIdButton id={team.id} />
+                      {/* Teams that minted accounts cannot be deleted in one
+                          shot — the staged flow deactivates first and the
+                          reaper clears the accounts over several ticks. */}
+                      <Tooltip
+                        relationship="label"
+                        content={
+                          team.invite_registration_granted
+                            ? t("admin.revokeInviteRegistration")
+                            : t("admin.grantInviteRegistration")
+                        }
+                      >
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          disabled={busyTeam === team.id}
+                          icon={<PersonAddRegular />}
+                          style={
+                            team.invite_registration_granted
+                              ? { color: tokens.colorPaletteGreenForeground1 }
+                              : undefined
+                          }
+                          onClick={() =>
+                            handleToggleGrant(
+                              team.id,
+                              !team.invite_registration_granted,
+                            )
+                          }
+                        />
+                      </Tooltip>
+                      {team.invite_registration_granted && (
+                        <Tooltip
+                          relationship="label"
+                          content={t("admin.stagedDissolve")}
+                        >
+                          <Button
+                            size="small"
+                            appearance="subtle"
+                            icon={<DismissCircleRegular />}
+                            onClick={() =>
+                              setDissolving({ id: team.id, name: team.name })
+                            }
+                          />
+                        </Tooltip>
+                      )}
                       <Button
                         size="small"
                         appearance="subtle"
@@ -287,6 +386,56 @@ export function AdminTeams() {
             <DialogActions>
               <Button onClick={() => setViewing(null)}>
                 {t("common.close")}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog
+        open={!!dissolving}
+        onOpenChange={(_, d) => {
+          if (!d.open) {
+            setDissolving(null);
+            setDissolveConfirm("");
+          }
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{t("admin.stagedDissolveTitle")}</DialogTitle>
+            <DialogContent>
+              <Text block>
+                {t("admin.stagedDissolveBody", {
+                  name: dissolving?.name ?? "",
+                })}
+              </Text>
+              <Field
+                label={t("admin.stagedDissolveConfirmLabel", {
+                  name: dissolving?.name ?? "",
+                })}
+                style={{ marginTop: 12 }}
+              >
+                <Input
+                  value={dissolveConfirm}
+                  onChange={(e) => setDissolveConfirm(e.target.value)}
+                />
+              </Field>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setDissolving(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                appearance="primary"
+                style={{ background: tokens.colorPaletteRedBackground3 }}
+                disabled={
+                  dissolveConfirm.trim() !== dissolving?.name ||
+                  busyTeam === dissolving?.id
+                }
+                onClick={handleStartDissolve}
+              >
+                {t("admin.stagedDissolveStart")}
               </Button>
             </DialogActions>
           </DialogBody>

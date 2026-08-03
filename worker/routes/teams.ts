@@ -37,6 +37,14 @@ import {
 import { recordAudit, auditRequestMeta } from "../lib/audit";
 import { isTeamLocked } from "../lib/lockdown";
 import {
+  checkTeamJoinAllowed,
+  getRestrictionState,
+  guardCapability,
+  hasLiveRestrictedAccounts,
+  isRestricted,
+  subtreeHasRestrictedMembers,
+} from "../lib/userCapabilities";
+import {
   MAX_GROUPS_PER_MEMBER,
   MAX_GROUPS_PER_TEAM,
   MAX_GROUP_DESCRIPTION_LENGTH,
@@ -112,6 +120,13 @@ function serializeTeamRow(team: TeamRow) {
     require_2fa: toBool(team.require_2fa),
     require_verified_email: toBool(team.require_verified_email),
     enable_groups: toBool(team.enable_groups),
+    invite_registration_granted: toBool(team.invite_registration_granted),
+    invite_registration_enabled: toBool(team.invite_registration_enabled),
+    invite_registration_exemptions: team.invite_registration_exemptions
+      ? (JSON.parse(team.invite_registration_exemptions) as unknown)
+      : {},
+    allow_normal_user_join: toBool(team.allow_normal_user_join),
+    dissolving_at: team.dissolving_at,
     // Send the parsed overrides, not the raw blob — the client shouldn't
     // have to know the storage format to render the settings toggles.
     role_permissions: parseRolePermissions(team.role_permissions),
@@ -564,6 +579,34 @@ app.post("/join/:token", requireAuth, async (c) => {
   const existing = await getMember(c.env.DB, invite.team_id, user.id);
   if (existing) return c.json({ error: "Already a member of this team" }, 409);
 
+  const joinState = await getRestrictionState(c.env.DB, user.id);
+  if (joinState) {
+    const joinErr = await checkTeamJoinAllowed(
+      c.env.DB,
+      joinState,
+      invite.team_id,
+    );
+    if (joinErr) return c.json({ error: joinErr }, 403);
+    // A team may decline unrestricted members entirely — used by teams whose
+    // population is meant to be uniformly invite-registered. Direct adds by
+    // an admin deliberately bypass this, so hiring staff still works.
+    if (!isRestricted(joinState)) {
+      const target = await c.env.DB.prepare(
+        "SELECT allow_normal_user_join FROM teams WHERE id = ?",
+      )
+        .bind(invite.team_id)
+        .first<{ allow_normal_user_join: number }>();
+      if (target && target.allow_normal_user_join !== 1)
+        return c.json(
+          {
+            error:
+              "This team does not accept invite links from existing accounts",
+          },
+          403,
+        );
+    }
+  }
+
   const teamReq = await getEffectiveTeamRequirements(c.env.DB, invite.team_id);
   if (teamReq) {
     const state = await getUserSecurityState(c.env.DB, user.id);
@@ -746,6 +789,12 @@ app.post("/", async (c) => {
     const disabled = await getConfigValue(c.env.DB, "disable_user_create_team");
     if (disabled) return c.json({ error: "Team creation is disabled" }, 403);
   }
+
+  // Restricted accounts create nothing by default — including sub-teams,
+  // which the branch above would otherwise wave through on the strength of
+  // an ancestor membership.
+  const capErr = await guardCapability(c.env.DB, user.id, "team:create");
+  if (capErr) return c.json({ error: capErr }, 403);
 
   if (body.avatar_url) {
     const imgErr = await validateImageUrl(body.avatar_url);
@@ -1040,6 +1089,8 @@ app.patch("/:id", async (c) => {
     require_verified_email?: boolean;
     enable_groups?: boolean;
     role_permissions?: unknown;
+    invite_registration_enabled?: boolean;
+    allow_normal_user_join?: boolean;
   }>();
 
   if (body.avatar_url) {
@@ -1083,6 +1134,20 @@ app.patch("/:id", async (c) => {
       );
     const reason = await isInvalidReparent(c.env.DB, id, body.parent_team_id);
     if (reason) return c.json({ error: reason }, 400);
+    // Moving a subtree that contains restricted members would strand them
+    // outside their own origin team — every individual step legal, the
+    // invariant broken retroactively. Tested on *members*, because a
+    // restricted user's origin is the top team, so a sub-team they joined
+    // would report no accounts of its own.
+    const descendants = await getDescendantTeamIds(c.env.DB, id);
+    if (await subtreeHasRestrictedMembers(c.env.DB, id, descendants))
+      return c.json(
+        {
+          error:
+            "This team contains members registered through a team invite and cannot be moved",
+        },
+        403,
+      );
     if (body.parent_team_id) {
       const parentEff = await getEffectiveMember(
         c.env.DB,
@@ -1138,6 +1203,35 @@ app.patch("/:id", async (c) => {
     values.push(
       Object.keys(cleaned).length === 0 ? null : JSON.stringify(cleaned),
     );
+  }
+  if (body.invite_registration_enabled !== undefined) {
+    if (!hasRole(member.role, "owner"))
+      return c.json(
+        { error: "Only the owner can toggle invite registration" },
+        403,
+      );
+    // The owner switch is meaningless without the site-admin grant, and
+    // silently accepting it would leave the settings UI showing an enabled
+    // channel that mints nothing.
+    if (
+      body.invite_registration_enabled &&
+      team.invite_registration_granted !== 1
+    )
+      return c.json(
+        {
+          error:
+            "A site administrator has not authorised this team for invite registration",
+        },
+        403,
+      );
+    updates.push("invite_registration_enabled = ?");
+    values.push(body.invite_registration_enabled ? 1 : 0);
+  }
+  if (body.allow_normal_user_join !== undefined) {
+    if (!hasRole(member.role, "admin"))
+      return c.json({ error: "Forbidden" }, 403);
+    updates.push("allow_normal_user_join = ?");
+    values.push(body.allow_normal_user_join ? 1 : 0);
   }
   for (const field of [
     "profile_show_description",
@@ -1209,6 +1303,23 @@ app.delete("/:id", async (c) => {
     return c.json({ error: "This team is locked and cannot be deleted" }, 403);
   }
 
+  // Dissolving a team that minted accounts destroys those accounts. That is
+  // a site-admin decision, taken through the staged flow — not something an
+  // owner can trigger from here.
+  //
+  // Keyed on whether live restricted accounts exist, never on the invite
+  // registration switch: otherwise an owner could flip the switch off and
+  // walk straight through this check with thousands of accounts still
+  // anchored to the team.
+  if (await hasLiveRestrictedAccounts(c.env.DB, id))
+    return c.json(
+      {
+        error:
+          "This team has accounts registered through its invite links. Only a site administrator can dissolve it.",
+      },
+      403,
+    );
+
   auditTeam(c, id, "team.delete");
 
   await dissolveTeam(c.env.DB, id, user.id);
@@ -1246,6 +1357,15 @@ app.post("/:id/members", async (c) => {
 
   const existing = await getMember(c.env.DB, id, target.id);
   if (existing) return c.json({ error: "Already a member" }, 409);
+
+  // A restricted account may only ever belong inside its own origin team's
+  // subtree — being *added* by someone else is not an exception, or the
+  // constraint would be one invitation away from meaningless.
+  const targetState = await getRestrictionState(c.env.DB, target.id);
+  if (targetState) {
+    const joinErr = await checkTeamJoinAllowed(c.env.DB, targetState, id);
+    if (joinErr) return c.json({ error: joinErr }, 403);
+  }
 
   const teamReq = await getEffectiveTeamRequirements(c.env.DB, id);
   if (teamReq) {
@@ -1383,6 +1503,18 @@ app.delete("/:id/members/:userId", async (c) => {
         { error: "Transfer ownership before leaving the team" },
         400,
       );
+    // Same protection as the explicit delete: leaving as the last member
+    // would otherwise be a second, quieter route to the same destruction.
+    // Pending accounts make this reachable even on a team that looks empty —
+    // they hold origin_team_id but no membership row yet.
+    if (await hasLiveRestrictedAccounts(c.env.DB, id))
+      return c.json(
+        {
+          error:
+            "This team has accounts registered through its invite links. Only a site administrator can dissolve it.",
+        },
+        403,
+      );
     // Last member — delete the team
     await dissolveTeam(c.env.DB, id, user.id);
     return c.json({ message: "Team deleted" });
@@ -1442,6 +1574,19 @@ app.post("/:id/transfer-ownership", async (c) => {
 
   const target = await getMember(c.env.DB, id, body.user_id);
   if (!target) return c.json({ error: "Target is not a team member" }, 404);
+
+  // Ownership carries every setting on the team, including the invite
+  // registration switches. Handing it to a restricted account would let the
+  // restriction be reconfigured from inside.
+  const targetRestriction = await getRestrictionState(c.env.DB, body.user_id);
+  if (targetRestriction && isRestricted(targetRestriction))
+    return c.json(
+      {
+        error:
+          "Cannot transfer ownership to an account registered through a team invite",
+      },
+      403,
+    );
 
   const now = Math.floor(Date.now() / 1000);
   await c.env.DB.batch([
@@ -1928,12 +2073,57 @@ app.post("/:id/invites", async (c) => {
     expires_in_hours?: number;
     ttl_hours?: number;
     email?: string;
+    allows_registration?: boolean;
   }>();
 
   let role: string = "member";
   if (body.role === "admin") role = "admin";
   if (body.role === "co-owner" && hasRole(eff.role, "owner")) role = "co-owner";
   const maxUses = body.max_uses ?? 0;
+
+  let allowsRegistration = 0;
+  if (body.allows_registration) {
+    const team = await c.env.DB.prepare(
+      "SELECT invite_registration_granted, invite_registration_enabled FROM teams WHERE id = ?",
+    )
+      .bind(id)
+      .first<{
+        invite_registration_granted: number;
+        invite_registration_enabled: number;
+      }>();
+    const siteEnabled = await getConfigValue(
+      c.env.DB,
+      "enable_team_invite_registration",
+    );
+    if (
+      !siteEnabled ||
+      team?.invite_registration_granted !== 1 ||
+      team?.invite_registration_enabled !== 1
+    )
+      return c.json(
+        { error: "This team is not accepting invite-link registrations" },
+        403,
+      );
+    // An account-minting invite must be bounded. team_invites defaults
+    // max_uses to 0 = unlimited, which is harmless while invites only admit
+    // existing users but would mean unlimited registration here — so the
+    // caller has to name a finite number, under the site's ceiling.
+    const cap = await getConfigValue(
+      c.env.DB,
+      "team_invite_registration_max_uses_cap",
+    );
+    if (!maxUses || maxUses < 1)
+      return c.json(
+        { error: "Invites that can create accounts need a usage limit" },
+        400,
+      );
+    if (maxUses > cap)
+      return c.json({ error: `Usage limit cannot exceed ${cap}` }, 400);
+    // Registration invites always land people as plain members. Someone
+    // arriving through a link should never start out able to manage the team.
+    role = "member";
+    allowsRegistration = 1;
+  }
   const requestedTtl = body.ttl_hours ?? body.expires_in_hours ?? 72;
   const ttlHours = Math.min(Math.max(requestedTtl, 1), 720); // max 30 days
   const now = Math.floor(Date.now() / 1000);
@@ -1942,8 +2132,8 @@ app.post("/:id/invites", async (c) => {
   const storedToken = await hashSecret(c.env, token);
 
   await c.env.DB.prepare(
-    `INSERT INTO team_invites (token, team_id, role, created_by, email, max_uses, uses, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+    `INSERT INTO team_invites (token, team_id, role, created_by, email, max_uses, uses, expires_at, created_at, allows_registration)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
   )
     .bind(
       storedToken,
@@ -1954,6 +2144,7 @@ app.post("/:id/invites", async (c) => {
       maxUses,
       expiresAt,
       now,
+      allowsRegistration,
     )
     .run();
 
@@ -2485,6 +2676,9 @@ app.post("/:id/apps", async (c) => {
     const disabled = await getConfigValue(c.env.DB, "disable_user_create_app");
     if (disabled) return c.json({ error: "App creation is disabled" }, 403);
   }
+
+  const capErr = await guardCapability(c.env.DB, user.id, "app:create");
+  if (capErr) return c.json({ error: capErr }, 403);
 
   const eff = await getEffectiveMember(c.env.DB, id, user.id);
   if (!eff) return c.json({ error: "Not found" }, 404);

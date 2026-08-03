@@ -111,6 +111,21 @@ description: 所有存储在 D1 中的运行时配置项，以及 Wrangler 绑�
 
 解析顺序为：单组覆盖 → 团队 `role_permissions` → 本键 → 代码内置默认（`groups:manage` 关、`groups:assign` 开）。每一级只贡献它显式设置过的键，因此这里留空对象就等于让所有团队直接落到内置默认。
 
+### 邀请链接注册
+
+[邀请链接注册](teams.md#邀请链接注册)的总开关与各项上限。默认关闭 —— 打开它才使团队所有者具备创建账号的能力，且即便打开，每个团队仍需在 **Admin → Teams** 单独获得授权。
+
+| 键                                       | 类型   | 默认值  | 说明                                                              |
+| ---------------------------------------- | ------ | ------- | ----------------------------------------------------------------- |
+| `enable_team_invite_registration`        | bool   | `false` | 总开关。关闭时所有相关端点返回 403。                              |
+| `team_invite_registration_max_uses_cap`  | int    | `1000`  | 团队为可注册邀请设置 `max_uses` 的上限。                          |
+| `team_invite_registration_rate_per_hour` | int    | `200`   | 单个邀请码每小时注册次数。按 IP 限流约束不了被广传的链接。        |
+| `restricted_user_capabilities`           | object | `{}`    | 放开给受限账号的功能，如 `{"app:create": true}`。留空即全部拒绝。 |
+| `restricted_pending_ttl_hours`           | int    | `72`    | 未完成的注册存活多久后被清理。                                    |
+| `restricted_dissolve_grace_hours`        | int    | `168`   | 解散停用账号到实际删除之间的宽限期。                              |
+
+能力键：`team:create`、`app:create`、`domain:create`、`pat:create`、`profile:public`、`gpg:manage`、`self:convert`。未列出的键落回内置默认值（全部拒绝）。账号安全永不受限。
+
 ### 团队加入门槛（站点底线）
 
 站点级硬性最低要求，任意团队都必须满足。所有者只能在此基础上加严，不能放松到底线之下。
