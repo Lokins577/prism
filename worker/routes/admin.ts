@@ -59,6 +59,7 @@ import { isUserLocked, isTeamLocked } from "../lib/lockdown";
 import { sanitizeRolePermissions } from "../lib/teamGroups";
 import {
   hasLiveRestrictedAccounts,
+  parseInviteRegistrationExemptions,
   sanitizeRestrictedCapabilities,
 } from "../lib/userCapabilities";
 import { hashLookupCandidate } from "../lib/secretCrypto";
@@ -1883,10 +1884,11 @@ app.get("/teams", async (c) => {
         avatar_url: await proxyImageUrl(c.env.APP_URL, c.env.DB, t.avatar_url),
         unproxied_avatar_url: t.avatar_url,
         // Parsed rather than raw JSON so the admin UI can toggle it without
-        // knowing the storage format.
-        invite_registration_exemptions: t.invite_registration_exemptions
-          ? (JSON.parse(t.invite_registration_exemptions) as unknown)
-          : {},
+        // knowing the storage format. Tolerant, because this runs for every
+        // row in the listing and one malformed blob must not 500 the page.
+        invite_registration_exemptions: parseInviteRegistrationExemptions(
+          t.invite_registration_exemptions,
+        ),
       })),
     ),
     total: count?.n ?? 0,
@@ -2007,9 +2009,9 @@ app.patch("/teams/:id/invite-registration", async (c) => {
   return c.json({
     invite_registration_granted: updated?.invite_registration_granted === 1,
     invite_registration_enabled: updated?.invite_registration_enabled === 1,
-    invite_registration_exemptions: updated?.invite_registration_exemptions
-      ? (JSON.parse(updated.invite_registration_exemptions) as unknown)
-      : {},
+    invite_registration_exemptions: parseInviteRegistrationExemptions(
+      updated?.invite_registration_exemptions ?? null,
+    ),
   });
 });
 

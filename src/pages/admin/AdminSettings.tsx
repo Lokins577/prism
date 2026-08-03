@@ -166,6 +166,22 @@ export function AdminSettings() {
   const set = (key: keyof SiteConfig, value: unknown) =>
     setLocalConfig((c) => ({ ...c, [key]: value }));
 
+  // Read once — the whole invite-registration block keys its disabled state
+  // off this flag.
+  const inviteRegOn = get("enable_team_invite_registration") ?? false;
+
+  /** Numeric config setter that refuses to store a non-number.
+   *
+   *  `type="number"` does not prevent the field being momentarily empty, and
+   *  `Number("")` is 0 — which for a usage cap or a TTL is a live setting,
+   *  not a blank. Leave the previous value in place instead. */
+  const setNumber = (key: keyof SiteConfig, raw: string) => {
+    if (raw.trim() === "") return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    set(key, n);
+  };
+
   const handleTestEmail = async () => {
     setTestingEmail(true);
     try {
@@ -611,7 +627,7 @@ export function AdminSettings() {
             </div>
             <Switch
               label={t("admin.enableInviteRegistration")}
-              checked={get("enable_team_invite_registration") ?? false}
+              checked={inviteRegOn}
               onChange={(_, d) =>
                 set("enable_team_invite_registration", d.checked)
               }
@@ -631,12 +647,12 @@ export function AdminSettings() {
                     get("team_invite_registration_max_uses_cap") ?? 1000,
                   )}
                   onChange={(e) =>
-                    set(
+                    setNumber(
                       "team_invite_registration_max_uses_cap",
-                      Number(e.target.value),
+                      e.target.value,
                     )
                   }
-                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  disabled={!inviteRegOn}
                   style={{ width: 120 }}
                 />
               </Field>
@@ -651,12 +667,12 @@ export function AdminSettings() {
                     get("team_invite_registration_rate_per_hour") ?? 200,
                   )}
                   onChange={(e) =>
-                    set(
+                    setNumber(
                       "team_invite_registration_rate_per_hour",
-                      Number(e.target.value),
+                      e.target.value,
                     )
                   }
-                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  disabled={!inviteRegOn}
                   style={{ width: 120 }}
                 />
               </Field>
@@ -669,9 +685,9 @@ export function AdminSettings() {
                   min={1}
                   value={String(get("restricted_pending_ttl_hours") ?? 72)}
                   onChange={(e) =>
-                    set("restricted_pending_ttl_hours", Number(e.target.value))
+                    setNumber("restricted_pending_ttl_hours", e.target.value)
                   }
-                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  disabled={!inviteRegOn}
                   style={{ width: 120 }}
                 />
               </Field>
@@ -684,12 +700,9 @@ export function AdminSettings() {
                   min={1}
                   value={String(get("restricted_dissolve_grace_hours") ?? 168)}
                   onChange={(e) =>
-                    set(
-                      "restricted_dissolve_grace_hours",
-                      Number(e.target.value),
-                    )
+                    setNumber("restricted_dissolve_grace_hours", e.target.value)
                   }
-                  disabled={!(get("enable_team_invite_registration") ?? false)}
+                  disabled={!inviteRegOn}
                   style={{ width: 120 }}
                 />
               </Field>
